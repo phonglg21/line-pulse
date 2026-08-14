@@ -91,6 +91,11 @@ function normalizeState(parsed){
 
 /* Lưu state lên Supabase */
 async function saveState(){
+
+  console.log(
+    "🔥 saveState() ĐƯỢC GỌI",
+    new Date().toLocaleTimeString()
+  );
   if(loadingFromSupabase) return;
   if(saveInProgress) return;
 
