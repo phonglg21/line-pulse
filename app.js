@@ -57,17 +57,184 @@ let toastTimer = null;
 /* ---------------------------------------------------------
    2. PERSISTENCE
    --------------------------------------------------------- */
-function saveState(){
-  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ console.warn("Không lưu được localStorage", e); }
+/* ---------------------------------------------------------
+   2. PERSISTENCE — SUPABASE
+   --------------------------------------------------------- */
+
+let loadingFromSupabase = false;
+let realtimeChannel = null;
+let saveInProgress = false;
+
+function normalizeState(parsed){
+  if(!parsed) return;
+
+  state = Object.assign(state, parsed);
+
+  state.config = Object.assign(
+    defaultConfig(),
+    parsed.config || {}
+  );
+
+  state.lots = Array.isArray(parsed.lots) ? parsed.lots : [];
+  state.consumedMap = parsed.consumedMap || {};
+  state.entryLog = Array.isArray(parsed.entryLog) ? parsed.entryLog : [];
+  state.lotColors = parsed.lotColors || {};
+  state.lotColorCounter = Number(parsed.lotColorCounter || 0);
+  state.nextId = Number(parsed.nextId || 1);
+  state.currentTick = Number(parsed.currentTick || 0);
+
+  if(!state.simTime){
+    state.simTime = new Date().toISOString();
+  }
 }
-function loadState(){
+
+
+/* Lưu state lên Supabase */
+async function saveState(){
+  if(loadingFromSupabase) return;
+  if(saveInProgress) return;
+
+  saveInProgress = true;
+
   try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return;
-    const parsed = JSON.parse(raw);
-    state = Object.assign(state, parsed);
-    state.config = Object.assign(defaultConfig(), parsed.config||{});
-  }catch(e){ console.warn("Không đọc được dữ liệu đã lưu", e); }
+    const { error } = await supabaseClient
+      .from("line_state")
+      .update({
+        state: state,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", "main");
+
+    if(error){
+      console.error("Supabase save error:", error);
+      toast("Không thể lưu dữ liệu lên máy chủ.");
+    }
+
+  }catch(e){
+    console.error("Supabase save exception:", e);
+  }finally{
+    saveInProgress = false;
+  }
+}
+
+
+/* Đọc state từ Supabase */
+async function loadState(){
+
+  loadingFromSupabase = true;
+
+  try{
+
+    const { data, error } = await supabaseClient
+      .from("line_state")
+      .select("state")
+      .eq("id", "main")
+      .single();
+
+    if(error){
+      console.error("Supabase load error:", error);
+
+      /* Nếu Supabase lỗi thì tạm dùng localStorage */
+      try{
+        const raw = localStorage.getItem(STORAGE_KEY);
+
+        if(raw){
+          normalizeState(JSON.parse(raw));
+          console.warn("Đang dùng dữ liệu localStorage tạm thời.");
+        }
+      }catch(e){
+        console.warn("Không đọc được localStorage", e);
+      }
+
+      return;
+    }
+
+    if(data && data.state){
+
+      normalizeState(data.state);
+
+      /* Đồng thời cập nhật localStorage làm bản dự phòng */
+      try{
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(state)
+        );
+      }catch(e){}
+
+    }
+
+  }catch(e){
+    console.error("Supabase load exception:", e);
+
+  }finally{
+    loadingFromSupabase = false;
+  }
+}
+
+
+/* ---------------------------------------------------------
+   SUPABASE REALTIME
+   --------------------------------------------------------- */
+
+function setupRealtime(){
+
+  if(realtimeChannel){
+    supabaseClient.removeChannel(realtimeChannel);
+  }
+
+  realtimeChannel = supabaseClient
+    .channel("line-pulse-state")
+
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "line_state",
+        filter: "id=eq.main"
+      },
+
+      payload => {
+
+        console.log(
+          "LINE PULSE — nhận dữ liệu mới từ Supabase"
+        );
+
+        if(!payload.new || !payload.new.state){
+          return;
+        }
+
+        loadingFromSupabase = true;
+
+        try{
+
+          normalizeState(payload.new.state);
+
+          try{
+            localStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify(state)
+            );
+          }catch(e){}
+
+          recompute();
+          renderAll();
+
+        }finally{
+          loadingFromSupabase = false;
+        }
+
+      }
+    )
+
+    .subscribe(status => {
+
+      console.log(
+        "Supabase Realtime status:",
+        status
+      );
+
+    });
 }
 
 /* ---------------------------------------------------------
@@ -861,10 +1028,14 @@ function downloadTemplate(){
 /* ---------------------------------------------------------
    10. INIT & EVENT WIRING
    --------------------------------------------------------- */
-function init(){
-  loadState();
+async function init(){
+
+  await loadState();
+
   recompute();
   renderAll();
+
+  setupRealtime();
 
   // clock loop
   requestAnimationFrame(tickLoop);
@@ -990,8 +1161,7 @@ function init(){
     ov.addEventListener("click", e=>{ if(e.target===ov) ov.classList.remove("open"); });
   });
 
-  // periodic autosave while playing
-  setInterval(()=>{ if(playing) saveState(); }, 4000);
+
 }
 
 document.addEventListener("DOMContentLoaded", init);
