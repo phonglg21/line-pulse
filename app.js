@@ -76,11 +76,6 @@ let realtimeSaveTimer = null;
 // Thời điểm cuối cùng chúng ta gọi recompute/render.
 let lastRealtimeRender = 0;
 
-let playing = false;
-let speed = 60;
-let lastFrameTs = null;
-let toastTimer = null;
-
 /* ---------------------------------------------------------
    2. PERSISTENCE
    --------------------------------------------------------- */
