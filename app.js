@@ -3316,7 +3316,7 @@ async function init(){
       .toISOString()
       .slice(0,19);
 
-  $("#applyTimeBtn").addEventListener("click", ()=>{
+  $("#applyTimeBtn").addEventListener("click", async ()=>{
 
     // Không cho chỉnh giờ trong REAL TIME
     if(state.timeMode === "realtime"){
@@ -3328,7 +3328,11 @@ async function init(){
 
     if(!val) return;
 
-    setSimTime(new Date(val));
+    const nextDate = new Date(val);
+
+    await ensurePlanForDate(nextDate);
+
+    setSimTime(nextDate);
 
     saveState();
 
