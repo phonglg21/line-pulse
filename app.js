@@ -1112,6 +1112,20 @@ function projectEndOfDay(){
 
   return ctx.entryLog;
 }
+   function getLinePositions(){
+  const cap = capacity(state.config);
+  const positions = new Array(cap).fill(null);
+
+  for(let pos = 1; pos <= cap; pos++){
+    const tick = state.currentTick - pos + 1;
+
+    if(tick >= 1 && tick <= state.entryLog.length){
+      positions[pos - 1] = state.entryLog[tick - 1];
+    }
+  }
+
+  return positions;
+}
 /* =========================================================
    KHSX IMPORT
    ========================================================= */
