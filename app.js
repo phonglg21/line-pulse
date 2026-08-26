@@ -62,7 +62,11 @@ let state = {
   nextId: 1,
   currentTick: 0,
   lotColors: {},
-  lotColorCounter: 0
+  lotColorCounter: 0,
+
+  // KHSX theo từng tháng
+  // Không chứa LOT, chỉ chứa Working Hours / Planned Qty
+  productionPlans: {}
 };
 
 let playing = false;
@@ -104,6 +108,8 @@ function normalizeState(parsed){
   state.lotColorCounter = Number(parsed.lotColorCounter || 0);
   state.nextId = Number(parsed.nextId || 1);
   state.currentTick = Number(parsed.currentTick || 0);
+
+  state.productionPlans = parsed.productionPlans || {};
 
   if(!state.simTime){
     state.simTime = new Date().toISOString();
@@ -270,184 +276,1838 @@ function setupRealtime(){
 }
 
 /* ---------------------------------------------------------
-   3. SCHEDULE-AWARE TIME HELPERS
+   3. KHSX + SCHEDULE-AWARE TIME ENGINE
    --------------------------------------------------------- */
+
 function dateAtTime(baseDate, hhmm){
   const d = new Date(baseDate);
-  const [h,m] = hhmm.split(":").map(Number);
-  d.setHours(h,m,0,0);
+  const [h,m] = String(hhmm || "00:00").split(":").map(Number);
+  d.setHours(h || 0, m || 0, 0, 0);
   return d;
 }
-function startOfDay(date){ const d=new Date(date); d.setHours(0,0,0,0); return d; }
-function addDays(date,n){ const d=new Date(date); d.setDate(d.getDate()+n); return d; }
-function sameCalendarDate(a,b){ return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
-function fmtYMD(date){
-  const y=date.getFullYear(), m=String(date.getMonth()+1).padStart(2,"0"), d=String(date.getDate()).padStart(2,"0");
-  return `${y}-${m}-${d}`;
-}
-function isHoliday(date, config){
-  return (config.holidays||[]).includes(fmtYMD(date));
+
+function startOfDay(date){
+  const d = new Date(date);
+  d.setHours(0,0,0,0);
+  return d;
 }
 
-function getDayWindow(date, config){
-  const start = dateAtTime(date, config.shiftStart);
-  const end = dateAtTime(date, config.shiftEnd);
-  if(isHoliday(date, config)){
-    // ngày nghỉ sản xuất: không có giờ làm việc nào trong ngày này
-    return {start, end:start, breaks:[]};
-  }
-  const breaks = (config.breaks||[])
-    .map(b=>({start:dateAtTime(date,b.start), end:dateAtTime(date,b.end)}))
-    .filter(b=> b.end>start && b.start<end)
+function addDays(date,n){
+  const d = new Date(date);
+  d.setDate(d.getDate()+n);
+  return d;
+}
+
+function sameCalendarDate(a,b){
+  return a.getFullYear()===b.getFullYear() &&
+         a.getMonth()===b.getMonth() &&
+         a.getDate()===b.getDate();
+}
+
+function fmtYMD(date){
+  const y=date.getFullYear();
+  const m=String(date.getMonth()+1).padStart(2,"0");
+  const d=String(date.getDate()).padStart(2,"0");
+  return `${y}-${m}-${d}`;
+}
+
+function monthKey(date){
+  const d=new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function escapeHtml(value){
+  return String(value ?? "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
+
+
+/* =========================================================
+   KHSX
+   ========================================================= */
+
+function hasProductionPlanForMonth(date){
+  return !!(
+    state.productionPlans &&
+    state.productionPlans[monthKey(date)]
+  );
+}
+
+function getPlanDay(date){
+
+  const key = fmtYMD(date);
+  const month = monthKey(date);
+
+  const plan =
+    state.productionPlans &&
+    state.productionPlans[month];
+
+  if(!plan) return null;
+
+  return plan.days?.[key] || {
+    workingHours: 0,
+    plannedQty: 0
+  };
+}
+
+function plannedHours(date){
+
+  const day = getPlanDay(date);
+
+  if(!day) return null;
+
+  return Math.max(
+    0,
+    Number(day.workingHours) || 0
+  );
+}
+
+
+/* =========================================================
+   BREAKS
+   ========================================================= */
+
+function getBaseBreaks(date, config){
+
+  const start =
+    dateAtTime(date, config.shiftStart);
+
+  const end =
+    dateAtTime(date, config.shiftEnd);
+
+  return (config.breaks || [])
+    .map(b => ({
+      start: dateAtTime(date,b.start),
+      end: dateAtTime(date,b.end)
+    }))
+    .filter(b =>
+      b.end > start &&
+      b.start < end
+    )
     .sort((a,b)=>a.start-b.start);
-  return {start,end,breaks};
 }
-function workSecondsInWindowUntil(window, uptoTime){
-  const t0 = window.start;
-  const t1 = uptoTime<window.start ? window.start : (uptoTime>window.end ? window.end : uptoTime);
-  if(t1<=t0) return 0;
-  let ms = t1-t0;
-  for(const b of window.breaks){
-    const bs = b.start<t0?t0:b.start;
-    const be = b.end>t1?t1:b.end;
-    if(be>bs) ms -= (be-bs);
-  }
-  return Math.max(0, ms/1000);
-}
-function elapsedWorkSeconds(anchorDate, currentDate, config){
-  if(currentDate<=anchorDate) return 0;
-  let total=0;
-  let day = startOfDay(anchorDate);
-  const lastDay = startOfDay(currentDate);
-  const anchorDay = startOfDay(anchorDate);
-  while(day<=lastDay){
-    const window = getDayWindow(day, config);
-    const segStart = (day.getTime()===anchorDay.getTime()) ? (anchorDate>window.start?anchorDate:window.start) : window.start;
-    const segEnd   = (day.getTime()===lastDay.getTime())  ? (currentDate<window.end?currentDate:window.end) : window.end;
-    if(segEnd>segStart){
-      let ms = segEnd-segStart;
-      for(const b of window.breaks){
-        const bs=b.start<segStart?segStart:b.start;
-        const be=b.end>segEnd?segEnd:b.end;
-        if(be>bs) ms -= (be-bs);
-      }
-      total += Math.max(0, ms/1000);
+
+
+/* =========================================================
+   WORKING HOURS CỦA TỪNG NGÀY
+   ========================================================= */
+
+function getDayProductionWindow(date, config){
+
+  const start =
+    dateAtTime(date, config.shiftStart);
+
+  /*
+    Nếu tháng này đã có KHSX:
+    KHSX là nguồn dữ liệu chính.
+  */
+
+  const hours = plannedHours(date);
+
+  if(hours !== null){
+
+    if(hours <= 0){
+
+      return {
+        start,
+        end:start,
+        breaks:[],
+        workSeconds:0,
+        planned:true
+      };
+
     }
-    day = addDays(day,1);
+
+    return {
+
+      start,
+
+      end:null,
+
+      breaks:getBaseBreaks(
+        date,
+        config
+      ),
+
+      // Working Hours là giờ sản xuất NET
+      workSeconds:hours * 3600,
+
+      planned:true
+    };
   }
+
+
+  /*
+    Nếu tháng chưa có KHSX:
+    giữ cơ chế cũ để app không chết.
+  */
+
+  const end =
+    dateAtTime(date, config.shiftEnd);
+
+  let ms =
+    Math.max(0,end-start);
+
+  for(const b of getBaseBreaks(date,config)){
+
+    const bs =
+      b.start < start
+        ? start
+        : b.start;
+
+    const be =
+      b.end > end
+        ? end
+        : b.end;
+
+    if(be > bs){
+      ms -= be-bs;
+    }
+  }
+
+  return {
+
+    start,
+    end,
+
+    breaks:getBaseBreaks(
+      date,
+      config
+    ),
+
+    workSeconds:
+      Math.max(0,ms/1000),
+
+    planned:false
+  };
+}
+
+
+/* =========================================================
+   TÍNH SỐ GIÂY SẢN XUẤT ĐÃ TRÔI QUA
+   ========================================================= */
+
+function workSecondsUntilFromWindow(
+  window,
+  uptoTime
+){
+
+  if(
+    window.workSeconds <= 0 ||
+    uptoTime <= window.start
+  ){
+    return 0;
+  }
+
+  const target =
+    new Date(uptoTime);
+
+  let remaining =
+    Math.min(
+      window.workSeconds,
+      Math.max(
+        0,
+        (target-window.start)/1000
+      )
+    );
+
+
+  /*
+    Trừ thời gian nghỉ.
+    OT sau shiftEnd không có break.
+  */
+
+  for(const b of window.breaks){
+
+    if(target <= b.start)
+      break;
+
+    const bs =
+      b.start > window.start
+        ? b.start
+        : window.start;
+
+    const be =
+      b.end < target
+        ? b.end
+        : target;
+
+    if(be > bs){
+
+      remaining -=
+        (be-bs)/1000;
+    }
+  }
+
+  return Math.max(
+    0,
+    Math.min(
+      window.workSeconds,
+      remaining
+    )
+  );
+}
+
+
+/* =========================================================
+   CỘNG THÊM X GIÂY SẢN XUẤT
+   ========================================================= */
+
+function addProductionSeconds(
+  date,
+  seconds,
+  config
+){
+
+  const window =
+    getDayProductionWindow(
+      date,
+      config
+    );
+
+  if(
+    window.workSeconds <= 0 ||
+    seconds <= 0
+  ){
+    return new Date(window.start);
+  }
+
+  let remaining =
+    Math.min(
+      seconds,
+      window.workSeconds
+    );
+
+  let cursor =
+    new Date(window.start);
+
+
+  for(const b of window.breaks){
+
+    if(b.end <= cursor)
+      continue;
+
+    if(b.start > cursor){
+
+      const chunk =
+        (b.start-cursor)/1000;
+
+      if(remaining <= chunk){
+
+        return new Date(
+          cursor.getTime() +
+          remaining*1000
+        );
+      }
+
+      remaining -= chunk;
+    }
+
+    if(b.end > cursor){
+
+      cursor =
+        new Date(b.end);
+    }
+  }
+
+  return new Date(
+    cursor.getTime() +
+    remaining*1000
+  );
+}
+
+
+/* =========================================================
+   THỜI ĐIỂM KẾT THÚC NGÀY SẢN XUẤT
+   ========================================================= */
+
+function dayEndTime(date,config){
+
+  const window =
+    getDayProductionWindow(
+      date,
+      config
+    );
+
+  if(window.workSeconds <= 0)
+    return window.start;
+
+  return addProductionSeconds(
+    date,
+    window.workSeconds,
+    config
+  );
+}
+
+
+/* =========================================================
+   TỔNG GIỜ SẢN XUẤT TỪ MỐC ĐẦU
+   ========================================================= */
+
+function elapsedWorkSeconds(
+  anchorDate,
+  currentDate,
+  config
+){
+
+  if(currentDate <= anchorDate)
+    return 0;
+
+  let total=0;
+
+  let day =
+    startOfDay(anchorDate);
+
+  const lastDay =
+    startOfDay(currentDate);
+
+  const anchorDay =
+    startOfDay(anchorDate);
+
+
+  while(day <= lastDay){
+
+    const window =
+      getDayProductionWindow(
+        day,
+        config
+      );
+
+    const segStart =
+      day.getTime() === anchorDay.getTime()
+        ? new Date(
+            Math.max(
+              anchorDate.getTime(),
+              window.start.getTime()
+            )
+          )
+        : window.start;
+
+
+    if(window.workSeconds > 0){
+
+      const segEnd =
+        day.getTime() === lastDay.getTime()
+          ? currentDate
+          : dayEndTime(day,config);
+
+      if(segEnd > segStart){
+
+        const before =
+          workSecondsUntilFromWindow(
+            window,
+            segStart
+          );
+
+        const after =
+          workSecondsUntilFromWindow(
+            window,
+            segEnd
+          );
+
+        total +=
+          Math.max(
+            0,
+            after-before
+          );
+      }
+    }
+
+    day =
+      addDays(day,1);
+  }
+
   return total;
 }
-function timeAfterWorkSeconds(window, fromTime, seconds){
-  let remaining = seconds*1000;
-  let segStart = fromTime;
-  for(const b of window.breaks){
-    if(b.end<=segStart) continue;
-    if(b.start>segStart){
-      const chunkMs = b.start-segStart;
-      if(remaining<=chunkMs) return new Date(segStart.getTime()+remaining);
-      remaining -= chunkMs;
+
+
+/* =========================================================
+   ĐỔI SỐ GIÂY SẢN XUẤT -> DATETIME
+   ========================================================= */
+
+function dateFromElapsedWorkSeconds(
+  anchorDate,
+  targetSeconds,
+  config
+){
+
+  let remaining =
+    Math.max(
+      0,
+      targetSeconds
+    );
+
+  let day =
+    startOfDay(anchorDate);
+
+  let first=true;
+
+
+  for(
+    let guard=0;
+    guard<100000;
+    guard++
+  ){
+
+    const window =
+      getDayProductionWindow(
+        day,
+        config
+      );
+
+    const segStart =
+      first
+        ? new Date(
+            Math.max(
+              anchorDate.getTime(),
+              window.start.getTime()
+            )
+          )
+        : window.start;
+
+    first=false;
+
+
+    if(window.workSeconds <= 0){
+
+      day =
+        addDays(day,1);
+
+      continue;
     }
-    if(b.end>segStart) segStart = b.end;
+
+
+    const already =
+      workSecondsUntilFromWindow(
+        window,
+        segStart
+      );
+
+    const available =
+      Math.max(
+        0,
+        window.workSeconds -
+        already
+      );
+
+
+    if(remaining <= available){
+
+      return addProductionSeconds(
+        day,
+        already + remaining,
+        config
+      );
+    }
+
+
+    remaining -= available;
+
+    day =
+      addDays(day,1);
   }
-  const chunkMs = window.end-segStart;
-  if(remaining<=chunkMs) return new Date(segStart.getTime()+remaining);
-  return new Date(window.end);
-}
-function dateFromElapsedWorkSeconds(anchorDate, targetSeconds, config){
-  let remaining = targetSeconds;
-  let day = startOfDay(anchorDate);
-  let first = true;
-  for(let guard=0; guard<100000; guard++){
-    const window = getDayWindow(day, config);
-    let segStart = first ? (anchorDate>window.start?anchorDate:window.start) : window.start;
-    first = false;
-    if(segStart>=window.end){ day = addDays(day,1); continue; }
-    const availSec = workSecondsInWindowUntil(window, window.end) - workSecondsInWindowUntil(window, segStart);
-    if(remaining<=availSec) return timeAfterWorkSeconds(window, segStart, remaining);
-    remaining -= availSec;
-    day = addDays(day,1);
-  }
+
   return new Date(anchorDate);
 }
+
+
+/* =========================================================
+   ANCHOR
+   ========================================================= */
+
 function getAnchor(config){
-  return new Date(`${config.lineStartDate}T${config.shiftStart}:00`);
+
+  return new Date(
+    `${config.lineStartDate}T${config.shiftStart}:00`
+  );
 }
-function getShiftStatus(config, now){
-  if(isHoliday(now, config)) return "holiday";
-  const window = getDayWindow(now, config);
-  if(now<window.start || now>window.end) return "idle";
-  for(const b of window.breaks){ if(now>=b.start && now<b.end) return "break"; }
+
+
+/* =========================================================
+   TRẠNG THÁI CA
+   ========================================================= */
+
+function getShiftStatus(config,now){
+
+  const window =
+    getDayProductionWindow(
+      now,
+      config
+    );
+
+  if(window.workSeconds <= 0)
+    return "holiday";
+
+  const end =
+    dayEndTime(now,config);
+
+  if(
+    now < window.start ||
+    now > end
+  ){
+    return "idle";
+  }
+
+  for(const b of window.breaks){
+
+    if(
+      now >= b.start &&
+      now < b.end
+    ){
+      return "break";
+    }
+  }
+
   return "running";
 }
 
-/* ---------------------------------------------------------
-   4. SIMULATION ENGINE
-   --------------------------------------------------------- */
-function capacity(config){ return config.capTrim + config.capChassis + config.capFinal; }
 
-function computeCurrentTick(config, simTimeIso){
-  const anchor = getAnchor(config);
-  const now = new Date(simTimeIso);
-  const elapsed = elapsedWorkSeconds(anchor, now, config);
-  return Math.max(0, Math.floor(elapsed / config.takt));
+/* =========================================================
+   SIMULATION ENGINE
+   ========================================================= */
+
+function capacity(config){
+
+  return (
+    config.capTrim +
+    config.capChassis +
+    config.capFinal
+  );
 }
 
-function nextAvailableLot(lots, consumedMap){
+function computeCurrentTick(
+  config,
+  simTimeIso
+){
+
+  const anchor =
+    getAnchor(config);
+
+  const now =
+    new Date(simTimeIso);
+
+  const elapsed =
+    elapsedWorkSeconds(
+      anchor,
+      now,
+      config
+    );
+
+  return Math.max(
+    0,
+    Math.floor(
+      elapsed/config.takt
+    )
+  );
+}
+
+
+function nextAvailableLot(
+  lots,
+  consumedMap
+){
+
   for(const lot of lots){
-    const consumed = consumedMap[lot.id]||0;
-    if(consumed < lot.originalQty) return lot;
+
+    const consumed =
+      consumedMap[lot.id] || 0;
+
+    if(
+      consumed <
+      lot.originalQty
+    ){
+      return lot;
+    }
   }
+
   return null;
 }
 
-// Mutates ctx.entryLog / ctx.consumedMap up to targetTick. ctx = {config, lots, consumedMap, entryLog}
-function syncEntryLog(ctx, targetTick){
-  const anchor = getAnchor(ctx.config);
-  const cap = capacity(ctx.config);
-  while(ctx.entryLog.length < targetTick){
-    const tick = ctx.entryLog.length + 1;
-    const lot = nextAvailableLot(ctx.lots, ctx.consumedMap);
-    const entryTime = dateFromElapsedWorkSeconds(anchor, tick*ctx.config.takt, ctx.config).toISOString();
-    const exitTime = dateFromElapsedWorkSeconds(anchor, (tick+cap)*ctx.config.takt, ctx.config).toISOString();
+
+function syncEntryLog(
+  ctx,
+  targetTick
+){
+
+  const anchor =
+    getAnchor(ctx.config);
+
+  const cap =
+    capacity(ctx.config);
+
+
+  while(
+    ctx.entryLog.length <
+    targetTick
+  ){
+
+    const tick =
+      ctx.entryLog.length + 1;
+
+    const lot =
+      nextAvailableLot(
+        ctx.lots,
+        ctx.consumedMap
+      );
+
+
+    const entryTime =
+      dateFromElapsedWorkSeconds(
+        anchor,
+        tick*ctx.config.takt,
+        ctx.config
+      ).toISOString();
+
+
+    const exitTime =
+      dateFromElapsedWorkSeconds(
+        anchor,
+        (tick+cap)*ctx.config.takt,
+        ctx.config
+      ).toISOString();
+
+
     if(lot){
-      const consumed = ctx.consumedMap[lot.id]||0;
-      const unitIndex = consumed+1;
-      ctx.consumedMap[lot.id] = unitIndex;
-      ctx.entryLog.push({tick, lotId:lot.id, code:lot.code, model:lot.model, spec:lot.spec, unitIndex, totalQty:lot.originalQty, entryTime, exitTime, empty:false});
-    } else {
-      ctx.entryLog.push({tick, empty:true, entryTime, exitTime});
+
+      const consumed =
+        ctx.consumedMap[lot.id] || 0;
+
+      const unitIndex =
+        consumed + 1;
+
+      ctx.consumedMap[lot.id] =
+        unitIndex;
+
+      ctx.entryLog.push({
+
+        tick,
+
+        lotId:lot.id,
+
+        code:lot.code,
+
+        model:lot.model,
+
+        spec:lot.spec,
+
+        unitIndex,
+
+        totalQty:lot.originalQty,
+
+        entryTime,
+
+        exitTime,
+
+        empty:false
+
+      });
+
+    }else{
+
+      ctx.entryLog.push({
+
+        tick,
+
+        empty:true,
+
+        entryTime,
+
+        exitTime
+
+      });
     }
   }
 }
 
+
 function recompute(){
-  const ctx = {config:state.config, lots:state.lots, consumedMap:state.consumedMap, entryLog:state.entryLog};
-  const ct = computeCurrentTick(state.config, state.simTime);
-  syncEntryLog(ctx, ct);
-  state.currentTick = ct;
+
+  const ctx = {
+
+    config:state.config,
+
+    lots:state.lots,
+
+    consumedMap:
+      state.consumedMap,
+
+    entryLog:
+      state.entryLog
+  };
+
+
+  const ct =
+    computeCurrentTick(
+      state.config,
+      state.simTime
+    );
+
+
+  syncEntryLog(
+    ctx,
+    ct
+  );
+
+
+  state.currentTick =
+    ct;
 }
+
 
 function projectEndOfDay(){
-  const now = new Date(state.simTime);
-  const window = getDayWindow(now, state.config);
-  const anchor = getAnchor(state.config);
-  const elapsedAtEnd = elapsedWorkSeconds(anchor, window.end, state.config);
-  const targetTick = Math.max(state.currentTick, Math.floor(elapsedAtEnd/state.config.takt));
-  const ctx = {config:state.config, lots:state.lots, consumedMap:Object.assign({}, state.consumedMap), entryLog:state.entryLog.slice()};
-  syncEntryLog(ctx, targetTick);
+
+  const now =
+    new Date(state.simTime);
+
+  const end =
+    dayEndTime(
+      now,
+      state.config
+    );
+
+  const anchor =
+    getAnchor(state.config);
+
+  const elapsed =
+    elapsedWorkSeconds(
+      anchor,
+      end,
+      state.config
+    );
+
+  const targetTick =
+    Math.max(
+      state.currentTick,
+      Math.floor(
+        elapsed/state.config.takt
+      )
+    );
+
+
+  const ctx = {
+
+    config:state.config,
+
+    lots:state.lots,
+
+    consumedMap:
+      Object.assign(
+        {},
+        state.consumedMap
+      ),
+
+    entryLog:
+      state.entryLog.slice()
+  };
+
+
+  syncEntryLog(
+    ctx,
+    targetTick
+  );
+
   return ctx.entryLog;
 }
+/* =========================================================
+   KHSX IMPORT
+   ========================================================= */
 
-function getLinePositions(){
-  const cap = capacity(state.config);
-  const positions = new Array(cap).fill(null);
-  for(let pos=1; pos<=cap; pos++){
-    const tick = state.currentTick - pos + 1;
-    if(tick>=1 && tick<=state.entryLog.length) positions[pos-1] = state.entryLog[tick-1];
+let planImportCtx = {
+  workbook:null,
+  parsedDays:[],
+  planMonth:"",
+  sheetName:""
+};
+
+
+function monthNumberFromText(text){
+
+  const map = {
+    january:1,
+    february:2,
+    march:3,
+    april:4,
+    may:5,
+    june:6,
+    july:7,
+    august:8,
+    september:9,
+    october:10,
+    november:11,
+    december:12
+  };
+
+  const s =
+    String(text || "").toLowerCase();
+
+  for(const [name,num]
+      of Object.entries(map)){
+
+    if(
+      new RegExp(
+        `\\b${name}\\b`,
+        "i"
+      ).test(s)
+    ){
+      return num;
+    }
   }
-  return positions; // index0 = Trim entry (mới nhất) ... cuối mảng = Final exit (sắp hoàn thành)
+
+  return null;
 }
 
+
+function detectPlanMonth(
+  rows,
+  sheetName
+){
+
+  const title =
+    rows
+      .slice(0,8)
+      .flat()
+      .join(" ");
+
+  const yearMatch =
+    title.match(
+      /\b(20\d{2})\b/
+    );
+
+  const year =
+    yearMatch
+      ? Number(yearMatch[1])
+      : new Date().getFullYear();
+
+  const month =
+    monthNumberFromText(title) ||
+    monthNumberFromText(sheetName);
+
+  if(!month){
+
+    throw new Error(
+      "Không xác định được tháng trong file KHSX."
+    );
+  }
+
+  return (
+    `${year}-${String(month).padStart(2,"0")}`
+  );
+}
+
+
+function findDayRow(rows){
+
+  for(
+    let r=0;
+    r<Math.min(rows.length,20);
+    r++
+  ){
+
+    const cols =
+      (rows[r] || [])
+        .map((v,c)=>({v,c}))
+        .filter(x =>
+          Number.isInteger(
+            Number(
+              String(x.v).trim()
+            )
+          ) &&
+          Number(x.v)>=1 &&
+          Number(x.v)<=31
+        );
+
+    if(cols.length >= 5){
+
+      return {
+
+        row:r,
+
+        cols:
+          cols.map(x=>x.c)
+
+      };
+    }
+  }
+
+  throw new Error(
+    "Không tìm thấy dòng ngày."
+  );
+}
+
+
+function findWorkingHoursRow(rows){
+
+  for(
+    let r=0;
+    r<Math.min(rows.length,20);
+    r++
+  ){
+
+    const text =
+      (rows[r] || [])
+        .map(v =>
+          String(v ?? "")
+            .replace(/\n/g," ")
+            .trim()
+        )
+        .join(" ");
+
+    if(
+      /working\s*(hours?|hous?)/i
+        .test(text)
+    ){
+
+      return r;
+    }
+  }
+
+  throw new Error(
+    "Không tìm thấy dòng Working Hours."
+  );
+}
+
+
+function parseProductionPlanSheet(
+  sheetName
+){
+
+  const ws =
+    planImportCtx
+      .workbook
+      .Sheets[sheetName];
+
+  const rows =
+    XLSX.utils.sheet_to_json(
+      ws,
+      {
+        header:1,
+        raw:false,
+        defval:""
+      }
+    );
+
+
+  const dayInfo =
+    findDayRow(rows);
+
+  const hoursRow =
+    findWorkingHoursRow(rows);
+
+  const planMonth =
+    detectPlanMonth(
+      rows,
+      sheetName
+    );
+
+
+  const [
+    year,
+    month
+  ] =
+    planMonth
+      .split("-")
+      .map(Number);
+
+
+  const lastDay =
+    new Date(
+      year,
+      month,
+      0
+    ).getDate();
+
+
+  const days=[];
+
+
+  for(
+    const c
+    of dayInfo.cols
+  ){
+
+    const day =
+      Number(
+        String(
+          rows[dayInfo.row][c]
+        ).trim()
+      );
+
+    if(
+      day < 1 ||
+      day > lastDay
+    ){
+      continue;
+    }
+
+
+    const raw =
+      rows[hoursRow]?.[c];
+
+
+    const hours =
+      raw === "" ||
+      raw == null
+        ? 0
+        : Number(
+            String(raw)
+              .replace(",",".")
+          );
+
+
+    if(
+      !Number.isFinite(hours) ||
+      hours < 0
+    ){
+      continue;
+    }
+
+
+    const workDate =
+      `${planMonth}-${String(day).padStart(2,"0")}`;
+
+
+    days.push({
+
+      work_date:
+        workDate,
+
+      working_hours:
+        hours,
+
+      planned_qty:
+        Math.round(
+          hours *
+          Number(state.config.uph || 0)
+        )
+    });
+  }
+
+
+  if(!days.length){
+
+    throw new Error(
+      "Không tìm thấy ngày/Working Hours hợp lệ."
+    );
+  }
+
+
+  planImportCtx.parsedDays =
+    days.sort(
+      (a,b)=>
+        a.work_date.localeCompare(
+          b.work_date
+        )
+    );
+
+  planImportCtx.planMonth =
+    planMonth;
+
+  planImportCtx.sheetName =
+    sheetName;
+
+
+  return planImportCtx.parsedDays;
+}
+
+
+function renderPlanPreview(){
+
+  const table =
+    $("#planPreviewTable");
+
+  if(!table) return;
+
+
+  table.innerHTML = `
+
+    <thead>
+      <tr>
+        <th>Ngày</th>
+        <th>Working Hours</th>
+        <th>UPH</th>
+        <th>Kế hoạch</th>
+      </tr>
+    </thead>
+
+    <tbody>
+
+      ${
+        planImportCtx.parsedDays
+          .map(d=>`
+
+            <tr>
+              <td>${escapeHtml(d.work_date)}</td>
+              <td>${d.working_hours}</td>
+              <td>${state.config.uph}</td>
+              <td>${d.planned_qty}</td>
+            </tr>
+
+          `)
+          .join("")
+      }
+
+    </tbody>
+  `;
+}
+
+
+function resetPlanImportUI(){
+
+  planImportCtx = {
+    workbook:null,
+    parsedDays:[],
+    planMonth:"",
+    sheetName:""
+  };
+
+
+  if($("#planFileInput"))
+    $("#planFileInput").value="";
+
+  if($("#planImportStep2"))
+    $("#planImportStep2")
+      .style.display="none";
+
+  if($("#planImportConfirmBtn"))
+    $("#planImportConfirmBtn")
+      .style.display="none";
+
+  if($("#planImportInfo"))
+    $("#planImportInfo")
+      .textContent="Chưa chọn file.";
+
+  if($("#planPreviewTable"))
+    $("#planPreviewTable")
+      .innerHTML="";
+}
+
+
+function handleProductionPlanFile(file){
+
+  const reader =
+    new FileReader();
+
+
+  reader.onload = e => {
+
+    try{
+
+      const wb =
+        XLSX.read(
+          new Uint8Array(
+            e.target.result
+          ),
+          {type:"array"}
+        );
+
+
+      planImportCtx.workbook =
+        wb;
+
+
+      const select =
+        $("#planSheetSelect");
+
+
+      select.innerHTML =
+        wb.SheetNames
+          .map(
+            n =>
+              `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`
+          )
+          .join("");
+
+
+      parseProductionPlanSheet(
+        wb.SheetNames[0]
+      );
+
+
+      $("#planUphDisplay").value =
+        state.config.uph;
+
+
+      $("#planImportInfo")
+        .textContent =
+          `KHSX tháng ${planImportCtx.planMonth} · ` +
+          `${planImportCtx.parsedDays.length} ngày · ` +
+          `Working Hours × UPH`;
+
+
+      renderPlanPreview();
+
+
+      $("#planImportStep2")
+        .style.display="block";
+
+
+      $("#planImportConfirmBtn")
+        .style.display="inline-block";
+
+
+    }catch(err){
+
+      console.error(
+        "KHSX parse error:",
+        err
+      );
+
+      toast(
+        err.message ||
+        "Không đọc được file KHSX."
+      );
+    }
+  };
+
+
+  reader.readAsArrayBuffer(file);
+}
+
+
+/* =========================================================
+   SUPABASE KHSX
+   ========================================================= */
+
+function daysToPlanMap(days){
+
+  const map={};
+
+  for(const d of days || []){
+
+    map[d.work_date] = {
+
+      workingHours:
+        Number(
+          d.working_hours
+        ) || 0,
+
+      plannedQty:
+        Number(
+          d.planned_qty
+        ) || 0
+    };
+  }
+
+  return map;
+}
+
+
+async function fetchLatestPlanMonth(
+  month
+){
+
+  const monthDate =
+    `${month}-01`;
+
+
+  const {
+    data,
+    error
+  } =
+    await supabaseClient
+      .from("production_plans")
+      .select(
+        "id,plan_month,version,status,created_at,updated_at"
+      )
+      .eq(
+        "plan_month",
+        monthDate
+      )
+      .order(
+        "version",
+        {ascending:false}
+      )
+      .limit(1);
+
+
+  if(error)
+    throw error;
+
+
+  if(!data?.length)
+    return null;
+
+
+  const plan =
+    data[0];
+
+
+  const {
+    data:days,
+    error:e2
+  } =
+    await supabaseClient
+      .from("production_plan_days")
+      .select(
+        "work_date,working_hours,planned_qty"
+      )
+      .eq(
+        "plan_id",
+        plan.id
+      )
+      .order(
+        "work_date",
+        {ascending:true}
+      );
+
+
+  if(e2)
+    throw e2;
+
+
+  return {
+
+    ...plan,
+
+    days:
+      daysToPlanMap(
+        days || []
+      )
+  };
+}
+
+
+async function loadPlanMonth(
+  month
+){
+
+  try{
+
+    const plan =
+      await fetchLatestPlanMonth(
+        month
+      );
+
+
+    if(plan){
+
+      state.productionPlans[month] = {
+
+        id:plan.id,
+
+        version:plan.version,
+
+        status:plan.status,
+
+        plan_month:
+          plan.plan_month,
+
+        days:
+          plan.days
+      };
+
+    }
+
+    return plan;
+
+  }catch(e){
+
+    console.error(
+      "KHSX load error:",
+      e
+    );
+
+    return null;
+  }
+}
+
+
+async function loadPlansAround(date){
+
+  const d =
+    new Date(date);
+
+
+  const current =
+    monthKey(d);
+
+
+  const next =
+    monthKey(
+      new Date(
+        d.getFullYear(),
+        d.getMonth()+1,
+        1
+      )
+    );
+
+
+  await Promise.all([
+
+    loadPlanMonth(current),
+
+    loadPlanMonth(next)
+
+  ]);
+
+
+  try{
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(state)
+    );
+
+  }catch(e){}
+}
+
+
+async function ensurePlanForDate(
+  date
+){
+
+  const month =
+    monthKey(date);
+
+
+  if(
+    !state.productionPlans[month]
+  ){
+
+    await loadPlanMonth(month);
+  }
+}
+
+
+/* =========================================================
+   LƯU KHSX
+   ========================================================= */
+
+async function saveProductionPlan(){
+
+  if(
+    !planImportCtx.planMonth ||
+    !planImportCtx.parsedDays.length
+  ){
+
+    toast(
+      "Chưa có dữ liệu KHSX hợp lệ."
+    );
+
+    return;
+  }
+
+
+  const month =
+    planImportCtx.planMonth;
+
+  const today =
+    new Date();
+
+  const currentMonth =
+    monthKey(today);
+
+  const todayYmd =
+    fmtYMD(today);
+
+
+  try{
+
+    $("#planImportConfirmBtn")
+      .disabled=true;
+
+
+    const previous =
+      await fetchLatestPlanMonth(
+        month
+      );
+
+
+    const previousMap =
+      previous?.days || {};
+
+
+    const incoming =
+      daysToPlanMap(
+        planImportCtx.parsedDays
+      );
+
+
+    const merged={};
+
+
+    /*
+      THÁNG HIỆN TẠI:
+
+      Trước hôm nay:
+        GIỮ KHSX CŨ
+
+      Từ hôm nay:
+        DÙNG KHSX MỚI
+    */
+
+    if(month === currentMonth){
+
+      for(
+        const [date,day]
+        of Object.entries(
+          previousMap
+        )
+      ){
+
+        if(
+          date < todayYmd
+        ){
+
+          merged[date]=day;
+        }
+      }
+
+
+      for(
+        const [date,day]
+        of Object.entries(
+          incoming
+        )
+      ){
+
+        if(
+          date >= todayYmd
+        ){
+
+          merged[date]=day;
+        }
+      }
+
+    }else{
+
+      /*
+        THÁNG TƯƠNG LAI:
+        thay toàn bộ tháng
+      */
+
+      Object.assign(
+        merged,
+        incoming
+      );
+    }
+
+
+    const version =
+      previous
+        ? Number(previous.version)+1
+        : 1;
+
+
+    /*
+      Archive version cũ
+    */
+
+    if(previous){
+
+      const {
+        error
+      } =
+        await supabaseClient
+          .from("production_plans")
+          .update({
+            status:"archived",
+            updated_at:
+              new Date().toISOString()
+          })
+          .eq(
+            "id",
+            previous.id
+          );
+
+      if(error)
+        throw error;
+    }
+
+
+    const status =
+      month === currentMonth
+        ? "current"
+        : "planned";
+
+
+    /*
+      Tạo version mới
+    */
+
+    const {
+      data:plan,
+      error:e1
+    } =
+      await supabaseClient
+        .from("production_plans")
+        .insert({
+
+          plan_month:
+            `${month}-01`,
+
+          version,
+
+          status
+        })
+        .select()
+        .single();
+
+
+    if(e1)
+      throw e1;
+
+
+    /*
+      Lưu từng ngày
+    */
+
+    const rows =
+      Object.entries(
+        merged
+      )
+      .map(
+        ([work_date,day])=>({
+
+          plan_id:
+            plan.id,
+
+          work_date,
+
+          working_hours:
+            day.workingHours,
+
+          planned_qty:
+            Math.round(
+              day.plannedQty
+            )
+        })
+      );
+
+
+    if(rows.length){
+
+      const {
+        error:e2
+      } =
+        await supabaseClient
+          .from(
+            "production_plan_days"
+          )
+          .insert(rows);
+
+      if(e2)
+        throw e2;
+    }
+
+
+    /*
+      Cập nhật cache local
+    */
+
+    state.productionPlans[month] = {
+
+      id:plan.id,
+
+      version:plan.version,
+
+      status:plan.status,
+
+      plan_month:
+        plan.plan_month,
+
+      days:
+        daysToPlanMap(rows)
+    };
+
+
+    /*
+      Nếu thay KHSX tháng hiện tại,
+      mọi dữ liệu mô phỏng tương lai
+      phải được tính lại.
+    */
+
+    if(month === currentMonth){
+
+      const currentTick =
+        computeCurrentTick(
+          state.config,
+          state.simTime
+        );
+
+
+      if(
+        state.entryLog.length >
+        currentTick
+      ){
+
+        state.entryLog =
+          state.entryLog.slice(
+            0,
+            currentTick
+          );
+
+
+        state.consumedMap={};
+
+
+        for(
+          const e
+          of state.entryLog
+        ){
+
+          if(!e.empty){
+
+            state.consumedMap[e.lotId] =
+              (
+                state.consumedMap[e.lotId] ||
+                0
+              ) + 1;
+          }
+        }
+      }
+    }
+
+
+    try{
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(state)
+      );
+
+    }catch(e){}
+
+
+    recompute();
+    renderAll();
+    saveState();
+
+
+    closeModal(
+      "planImportModal"
+    );
+
+    resetPlanImportUI();
+
+
+    toast(
+      `Đã áp dụng KHSX tháng ${month} — Version ${version}.`
+    );
+
+
+  }catch(e){
+
+    console.error(
+      "KHSX save error:",
+      e
+    );
+
+    toast(
+      e.message ||
+      "Không thể lưu KHSX."
+    );
+
+  }finally{
+
+    $("#planImportConfirmBtn")
+      .disabled=false;
+  }
+}
 /* ---------------------------------------------------------
    5. DOM HELPERS
    --------------------------------------------------------- */
@@ -1543,6 +3203,9 @@ async function init(){
 
   await loadState();
 
+  // Tải KHSX tháng hiện tại và tháng kế tiếp
+  await loadPlansAround(new Date());
+
   /*
     ================================================
     TIME MODE
@@ -1744,7 +3407,77 @@ async function init(){
     closeModal("settingsModal");
     toast("Đã lưu cấu hình.");
   });
+// =====================================================
+// KHSX IMPORT
+// =====================================================
 
+if($("#btnImportPlan")){
+
+  $("#btnImportPlan").addEventListener(
+    "click",
+    ()=>{
+      resetPlanImportUI();
+      openModal("planImportModal");
+    }
+  );
+}
+
+
+if($("#planFileInput")){
+
+  $("#planFileInput").addEventListener(
+    "change",
+    e=>{
+      if(e.target.files[0]){
+        handleProductionPlanFile(
+          e.target.files[0]
+        );
+      }
+    }
+  );
+}
+
+
+if($("#planSheetSelect")){
+
+  $("#planSheetSelect").addEventListener(
+    "change",
+    e=>{
+
+      try{
+
+        parseProductionPlanSheet(
+          e.target.value
+        );
+
+        renderPlanPreview();
+
+        $("#planImportInfo")
+          .textContent =
+          `KHSX tháng ${planImportCtx.planMonth} · ` +
+          `${planImportCtx.parsedDays.length} ngày · ` +
+          `Working Hours × UPH`;
+
+      }catch(err){
+
+        toast(
+          err.message ||
+          "Không đọc được sheet KHSX."
+        );
+      }
+    }
+  );
+}
+
+
+if($("#planImportConfirmBtn")){
+
+  $("#planImportConfirmBtn")
+    .addEventListener(
+      "click",
+      saveProductionPlan
+    );
+}
   // import modal
   $("#btnImport").addEventListener("click", ()=>{ resetImportUI(); openModal("importModal"); });
   $("#fileInput").addEventListener("change", e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
