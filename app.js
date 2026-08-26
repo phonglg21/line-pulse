@@ -1854,40 +1854,62 @@ async function saveProductionPlan(){
         DÙNG KHSX MỚI
     */
 
-    if(month === currentMonth){
+if(month === currentMonth){
 
-      for(
-        const [date,day]
-        of Object.entries(
-          previousMap
-        )
-      ){
+  /*
+    NGÀY ĐÃ QUA:
+    - Nếu đã có KHSX cũ -> giữ KHSX cũ
+    - Nếu chưa có KHSX cũ -> lấy KHSX từ file mới
 
-        if(
-          date < todayYmd
-        ){
+    TỪ HÔM NAY TRỞ ĐI:
+    - luôn dùng KHSX mới
+  */
 
-          merged[date]=day;
-        }
-      }
+  for(const [date, day] of Object.entries(incoming)){
 
+    if(date < todayYmd){
 
-      for(
-        const [date,day]
-        of Object.entries(
-          incoming
-        )
-      ){
-
-        if(
-          date >= todayYmd
-        ){
-
-          merged[date]=day;
-        }
+      if(previousMap[date]){
+        merged[date] = previousMap[date];
+      }else{
+        merged[date] = day;
       }
 
     }else{
+
+      merged[date] = day;
+
+    }
+
+  }
+
+  /*
+    Bổ sung các ngày quá khứ chỉ có trong KHSX cũ
+    nhưng file mới không chứa.
+  */
+  for(const [date, day] of Object.entries(previousMap)){
+
+    if(
+      date < todayYmd &&
+      !merged[date]
+    ){
+      merged[date] = day;
+    }
+
+  }
+
+}else{
+
+  /*
+    THÁNG TƯƠNG LAI:
+    thay toàn bộ tháng
+  */
+
+  Object.assign(
+    merged,
+    incoming
+  );
+}
 
       /*
         THÁNG TƯƠNG LAI:
