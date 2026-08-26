@@ -2582,7 +2582,7 @@ function switchToSimulation(){
    TUA THỜI GIAN
    ========================================================= */
 
-function jump(seconds){
+async function jump(seconds){
 
   /*
     Tua thời gian chỉ có ý nghĩa trong SIMULATION.
@@ -2601,7 +2601,7 @@ function jump(seconds){
   const next = new Date(
     current.getTime() + Number(seconds) * 1000
   );
-
+  await ensurePlanForDate(next);
   setSimTime(next);
 
   // Lưu ngay sau thao tác tua.
