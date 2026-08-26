@@ -39,15 +39,42 @@ const LOT_PALETTE = [
 
 let state = {
   config: defaultConfig(),
-  lots: [],          // {id, code, model, spec, originalQty}
-  consumedMap: {},    // lotId -> số xe đã vào chuyền
-  entryLog: [],        // {tick, lotId, code, model, spec, unitIndex, totalQty, entryTime, exitTime, empty}
+  lots: [],
+  consumedMap: {},
+  entryLog: [],
+
+  // ================================
+  // TIME ENGINE
+  // ================================
+
+  // "realtime" = chạy theo đồng hồ thật
+  // "simulation" = chạy theo thời gian mô phỏng
+  timeMode: "realtime",
+
+  // Thời gian mô phỏng hiện tại.
+  // Trong realtime mode, giá trị này chỉ là snapshot.
   simTime: new Date().toISOString(),
+
+  // Lưu thời điểm lần cuối engine được đồng bộ.
+  // Dùng để tương thích dữ liệu cũ và debug.
+  lastTimeSync: new Date().toISOString(),
+
   nextId: 1,
   currentTick: 0,
-  lotColors: {},       // mã lot -> màu (gán 1 lần, giữ ổn định)
+  lotColors: {},
   lotColorCounter: 0
 };
+
+let playing = false;
+let speed = 60;
+let lastFrameTs = null;
+let toastTimer = null;
+
+// Lưu state định kỳ trong REAL TIME, không lưu mỗi frame.
+let realtimeSaveTimer = null;
+
+// Thời điểm cuối cùng chúng ta gọi recompute/render.
+let lastRealtimeRender = 0;
 
 let playing = false;
 let speed = 60;
@@ -157,7 +184,12 @@ async function loadState(){
     if(data && data.state){
 
       normalizeState(data.state);
-
+if(
+  state.timeMode !== "realtime" &&
+  state.timeMode !== "simulation"
+){
+  state.timeMode = "realtime";
+}
       /* Đồng thời cập nhật localStorage làm bản dự phòng */
       try{
         localStorage.setItem(
@@ -782,30 +814,509 @@ function renderAll(){
 }
 
 /* ---------------------------------------------------------
-   7. TIME CONTROL
+   7. TIME ENGINE
    --------------------------------------------------------- */
-function setSimTime(date){
+
+/*
+  LINE PULSE TIME ENGINE
+
+  Có 2 chế độ:
+
+  1. REALTIME
+     - Mặc định.
+     - Đồng hồ = thời gian thực của thiết bị.
+     - Đóng web bao lâu không quan trọng.
+     - Mở lại lúc nào => lấy đúng thời gian lúc đó.
+     - Không phụ thuộc requestAnimationFrame khi web bị đóng.
+
+  2. SIMULATION
+     - Dùng state.simTime.
+     - Có Play / Pause.
+     - Có tốc độ x1 / x10 / x60 / x300 / x1800.
+     - Có tua ±1p / ±15p / ±1h.
+     - Có thể nhập thời gian thủ công.
+*/
+
+
+function isRealtimeMode(){
+  return state.timeMode === "realtime";
+}
+
+
+/* =========================================================
+   SET THỜI GIAN
+   ========================================================= */
+
+function setSimTime(date, options = {}){
+
+  if(!(date instanceof Date) || isNaN(date.getTime())){
+    console.warn("setSimTime: thời gian không hợp lệ", date);
+    return;
+  }
+
   state.simTime = date.toISOString();
+  state.lastTimeSync = new Date().toISOString();
+
   recompute();
   renderAll();
+
+  if(options.save !== false){
+    throttledTimeSave();
+  }
 }
+
+
+/* =========================================================
+   CHUYỂN REAL TIME
+   ========================================================= */
+
+function switchToRealtime(){
+
+  state.timeMode = "realtime";
+
+  // Ngay khi chuyển sang REAL TIME,
+  // lấy đồng hồ thật ngay lập tức.
+  const now = new Date();
+
+  state.simTime = now.toISOString();
+  state.lastTimeSync = now.toISOString();
+
+  // REAL TIME luôn chạy.
+  playing = true;
+  lastFrameTs = null;
+
+  recompute();
+  renderAll();
+
+  saveState();
+
+  toast("Đã chuyển sang thời gian thực.");
+}
+
+
+/* =========================================================
+   CHUYỂN SIMULATION
+   ========================================================= */
+
+function switchToSimulation(){
+
+  // Khi chuyển từ REAL TIME sang SIMULATION,
+  // lấy thời gian thực hiện tại làm mốc bắt đầu.
+  if(isRealtimeMode()){
+    state.simTime = new Date().toISOString();
+  }
+
+  state.timeMode = "simulation";
+
+  // Simulation mặc định chạy.
+  playing = true;
+  lastFrameTs = null;
+
+  recompute();
+  renderAll();
+
+  updateTimeModeUI();
+
+  saveState();
+
+  toast("Đã chuyển sang thời gian mô phỏng.");
+}
+
+
+/* =========================================================
+   TUA THỜI GIAN
+   ========================================================= */
+
 function jump(seconds){
-  setSimTime(new Date(new Date(state.simTime).getTime() + seconds*1000));
+
+  /*
+    Tua thời gian chỉ có ý nghĩa trong SIMULATION.
+
+    Nếu đang REAL TIME thì không cho tua,
+    vì REAL TIME phải luôn bám đồng hồ thật.
+  */
+
+  if(isRealtimeMode()){
+    toast("REAL TIME đang chạy theo đồng hồ thực.");
+    return;
+  }
+
+  const current = new Date(state.simTime);
+
+  const next = new Date(
+    current.getTime() + Number(seconds) * 1000
+  );
+
+  setSimTime(next);
+
+  // Lưu ngay sau thao tác tua.
   saveState();
 }
-function tickLoop(ts){
-  if(lastFrameTs===null) lastFrameTs = ts;
-  const deltaReal = (ts-lastFrameTs)/1000;
-  lastFrameTs = ts;
-  if(playing){
-    setSimTime(new Date(new Date(state.simTime).getTime() + deltaReal*speed*1000));
+
+
+/* =========================================================
+   RESET SIMULATION
+   ========================================================= */
+
+function resetSimulationTime(){
+
+  state.entryLog = [];
+  state.consumedMap = {};
+
+  if(isRealtimeMode()){
+
+    // REAL TIME: reset về hiện tại.
+    state.simTime = new Date().toISOString();
+
+  }else{
+
+    // SIMULATION: giữ hành vi cũ,
+    // reset về đầu ca.
+    state.simTime = getAnchor(
+      state.config
+    ).toISOString();
   }
+
+  state.currentTick = 0;
+
+  recompute();
+  renderAll();
+
+  saveState();
+}
+
+
+/* =========================================================
+   CLOCK ENGINE
+   ========================================================= */
+
+function tickLoop(ts){
+
+  if(lastFrameTs === null){
+    lastFrameTs = ts;
+  }
+
+  const deltaReal =
+    Math.max(0, (ts - lastFrameTs) / 1000);
+
+  lastFrameTs = ts;
+
+
+  /* -------------------------------------------------------
+     REAL TIME
+     ------------------------------------------------------- */
+
+  if(isRealtimeMode()){
+
+    /*
+      Không cộng deltaReal.
+
+      Không dùng:
+        simTime += deltaReal
+
+      Vì khi tab bị đóng / máy tắt,
+      requestAnimationFrame không chạy.
+
+      Thay vào đó:
+        simTime = Date.now()
+
+      Vì vậy mở lại web sau 2 tiếng
+      => thời gian tự nhảy đúng 2 tiếng.
+    */
+
+    const now = new Date();
+
+    state.simTime = now.toISOString();
+    state.lastTimeSync = state.simTime;
+
+    /*
+      Không cần recompute 60 lần/giây.
+      1 lần/giây là đủ cho đồng hồ và logic line.
+    */
+
+    if(
+      now.getTime() - lastRealtimeRender >= 1000
+    ){
+
+      lastRealtimeRender = now.getTime();
+
+      recompute();
+      renderAll();
+
+      throttledTimeSave();
+    }
+
+  }
+
+
+  /* -------------------------------------------------------
+     SIMULATION
+     ------------------------------------------------------- */
+
+  else if(playing){
+
+    const current =
+      new Date(state.simTime);
+
+    const next =
+      new Date(
+        current.getTime()
+        + deltaReal * speed * 1000
+      );
+
+    state.simTime = next.toISOString();
+    state.lastTimeSync = new Date().toISOString();
+
+    recompute();
+    renderAll();
+
+    /*
+      Không save mỗi frame.
+      Chỉ lưu định kỳ.
+    */
+    throttledTimeSave();
+  }
+
+
   requestAnimationFrame(tickLoop);
 }
+
+
+/* =========================================================
+   SAVE TIME THROTTLE
+   ========================================================= */
+
+function throttledTimeSave(){
+
+  if(realtimeSaveTimer){
+    return;
+  }
+
+  /*
+    REAL TIME:
+      Không cần ghi database mỗi giây.
+
+    SIMULATION:
+      Cũng không cần ghi mỗi frame.
+
+    10 giây là đủ để tránh spam Supabase.
+  */
+
+  realtimeSaveTimer = setTimeout(async ()=>{
+
+    realtimeSaveTimer = null;
+
+    try{
+      await saveState();
+    }catch(e){
+      console.warn(
+        "Không thể lưu time state:",
+        e
+      );
+    }
+
+  }, 10000);
+}
+
+
+/* =========================================================
+   TIME MODE UI
+   ========================================================= */
+
+function ensureTimeModeUI(){
+
+  // Nếu đã tồn tại thì không tạo lại.
+  if($("#timeModeSelect")){
+    return;
+  }
+
+  const timebar =
+    document.querySelector(".timebar");
+
+  if(!timebar){
+    console.warn(
+      "Không tìm thấy .timebar"
+    );
+    return;
+  }
+
+  const group =
+    document.createElement("div");
+
+  group.className = "timebar-group";
+
+  group.innerHTML = `
+    <label class="timebar-label">
+      Chế độ
+    </label>
+
+    <select id="timeModeSelect">
+      <option value="realtime">
+        🟢 Thời gian thực
+      </option>
+
+      <option value="simulation">
+        🔵 Mô phỏng
+      </option>
+    </select>
+  `;
+
+  /*
+    Chèn vào đầu timebar.
+  */
+
+  timebar.insertBefore(
+    group,
+    timebar.firstChild
+  );
+
+
+  $("#timeModeSelect").value =
+    state.timeMode;
+
+
+  $("#timeModeSelect").addEventListener(
+    "change",
+    e=>{
+
+      const mode = e.target.value;
+
+      if(mode === "realtime"){
+        switchToRealtime();
+      }else{
+        switchToSimulation();
+      }
+
+    }
+  );
+}
+
+
+/* =========================================================
+   CẬP NHẬT UI
+   ========================================================= */
+
+function updateTimeModeUI(){
+
+  const select =
+    $("#timeModeSelect");
+
+  if(select){
+    select.value =
+      state.timeMode;
+  }
+
+
+  const playBtn =
+    $("#playPauseBtn");
+
+  const speedSelect =
+    $("#speedSelect");
+
+  const setTimeInput =
+    $("#setTimeInput");
+
+  const applyTimeBtn =
+    $("#applyTimeBtn");
+
+  const jumpButtons =
+    $$("[data-jump]");
+
+
+  if(isRealtimeMode()){
+
+    /*
+      REAL TIME:
+      - Không cần Play/Pause.
+      - Không cần speed.
+      - Không cho chỉnh thời gian thủ công.
+      - Không cho tua.
+    */
+
+    if(playBtn){
+
+      playBtn.textContent = "●";
+
+      playBtn.title =
+        "Đang chạy theo thời gian thực";
+
+      playBtn.disabled = true;
+    }
+
+    if(speedSelect){
+      speedSelect.disabled = true;
+    }
+
+    if(setTimeInput){
+      setTimeInput.disabled = true;
+    }
+
+    if(applyTimeBtn){
+      applyTimeBtn.disabled = true;
+    }
+
+    jumpButtons.forEach(btn=>{
+      btn.disabled = true;
+    });
+
+  }
+
+  else{
+
+    /*
+      SIMULATION:
+      Khôi phục toàn bộ điều khiển.
+    */
+
+    if(playBtn){
+
+      playBtn.disabled = false;
+
+      playBtn.textContent =
+        playing ? "⏸" : "▶";
+
+      playBtn.title =
+        "Chạy / Dừng mô phỏng";
+    }
+
+    if(speedSelect){
+      speedSelect.disabled = false;
+    }
+
+    if(setTimeInput){
+      setTimeInput.disabled = false;
+    }
+
+    if(applyTimeBtn){
+      applyTimeBtn.disabled = false;
+    }
+
+    jumpButtons.forEach(btn=>{
+      btn.disabled = false;
+    });
+  }
+}
+
+
+/* =========================================================
+   THROTTLED SAVE CŨ
+   ========================================================= */
+
 let saveThrottle = null;
+
 function throttledSave(){
-  if(saveThrottle) return;
-  saveThrottle = setTimeout(()=>{ saveState(); saveThrottle=null; }, 1500);
+
+  if(saveThrottle){
+    return;
+  }
+
+  saveThrottle = setTimeout(
+    ()=>{
+      saveState();
+      saveThrottle = null;
+    },
+    1500
+  );
 }
 
 /* ---------------------------------------------------------
@@ -1033,49 +1544,165 @@ function downloadTemplate(){
 /* ---------------------------------------------------------
    10. INIT & EVENT WIRING
    --------------------------------------------------------- */
-async function init(){
-
   await loadState();
+
+  /*
+    ================================================
+    TIME MODE
+    ================================================
+  */
+
+  // Nếu state cũ chưa có timeMode
+  if(
+    state.timeMode !== "realtime" &&
+    state.timeMode !== "simulation"
+  ){
+    state.timeMode = "realtime";
+  }
+
+  /*
+    REAL TIME:
+    Khi mở web luôn lấy thời gian thực hiện tại.
+    Không sử dụng simTime cũ để làm đồng hồ.
+  */
+
+  if(state.timeMode === "realtime"){
+
+    state.simTime = new Date().toISOString();
+    state.lastTimeSync = state.simTime;
+
+    playing = true;
+
+  }else{
+
+    // Simulation giữ simTime đã lưu
+    playing = false;
+  }
 
   recompute();
   renderAll();
 
   setupRealtime();
 
-  // clock loop
+  /*
+    Tạo bộ chọn:
+    REAL TIME / SIMULATION
+  */
+
+  ensureTimeModeUI();
+  updateTimeModeUI();
+
+  /*
+    clock loop
+  */
+
   requestAnimationFrame(tickLoop);
 
-  // play/pause
+
+  /*
+    ================================================
+    PLAY / PAUSE
+    ================================================
+  */
+
   $("#playPauseBtn").addEventListener("click", ()=>{
+
+    // REAL TIME luôn chạy, không pause
+    if(state.timeMode === "realtime"){
+      return;
+    }
+
     playing = !playing;
+
     lastFrameTs = null;
+
+    updateTimeModeUI();
     renderClock();
   });
-  $("#speedSelect").addEventListener("change", e=>{ speed = Number(e.target.value); });
 
-  // jumps
-  $$("[data-jump]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{ jump(Number(btn.dataset.jump)); });
+
+  /*
+    ================================================
+    SPEED
+    ================================================
+  */
+
+  $("#speedSelect").addEventListener("change", e=>{
+    speed = Number(e.target.value);
   });
 
-  // set time
-  $("#setTimeInput").value = new Date(state.simTime).toISOString().slice(0,19);
+
+  /*
+    ================================================
+    JUMPS
+    ================================================
+  */
+
+  $$("[data-jump]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      jump(Number(btn.dataset.jump));
+    });
+  });
+
+
+  /*
+    ================================================
+    SET TIME
+    ================================================
+  */
+
+  $("#setTimeInput").value =
+    new Date(state.simTime)
+      .toISOString()
+      .slice(0,19);
+
   $("#applyTimeBtn").addEventListener("click", ()=>{
+
+    // Không cho chỉnh giờ trong REAL TIME
+    if(state.timeMode === "realtime"){
+      toast("Hãy chuyển sang SIMULATION để chỉnh thời gian.");
+      return;
+    }
+
     const val = $("#setTimeInput").value;
+
     if(!val) return;
+
     setSimTime(new Date(val));
+
     saveState();
+
     toast("Đã cập nhật thời gian mô phỏng.");
   });
 
-  // reset sim
+
+  /*
+    ================================================
+    RESET SIMULATION
+    ================================================
+  */
+
   $("#resetSimBtn").addEventListener("click", ()=>{
-    if(!confirm("Reset mô phỏng: xoá toàn bộ lịch sử xe đã vào chuyền và đưa giờ về đầu ca. Danh sách lot trong hàng đợi vẫn giữ nguyên. Tiếp tục?")) return;
+
+    if(!confirm(
+      "Reset mô phỏng: xoá toàn bộ lịch sử xe đã vào chuyền và đưa giờ về đầu ca. Danh sách lot trong hàng đợi vẫn giữ nguyên. Tiếp tục?"
+    )) return;
+
     state.entryLog = [];
     state.consumedMap = {};
-    state.simTime = getAnchor(state.config).toISOString();
+
+    if(state.timeMode === "realtime"){
+      state.simTime = new Date().toISOString();
+    }else{
+      state.simTime =
+        getAnchor(state.config).toISOString();
+    }
+
     recompute();
-    renderAll(); saveState();
+    renderAll();
+
+    saveState();
+
     toast("Đã reset mô phỏng.");
   });
 
