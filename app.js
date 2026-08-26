@@ -1539,6 +1539,8 @@ function downloadTemplate(){
 /* ---------------------------------------------------------
    10. INIT & EVENT WIRING
    --------------------------------------------------------- */
+async function init(){
+
   await loadState();
 
   /*
