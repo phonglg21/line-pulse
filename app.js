@@ -2591,15 +2591,19 @@ function switchToRealtime(){
 
 function switchToSimulation(){
 
-  // Khi chuyển từ REAL TIME sang SIMULATION,
-  // lấy thời gian thực hiện tại làm mốc bắt đầu.
-  if(isRealtimeMode()){
-    state.simTime = new Date().toISOString();
-  }
+  /*
+    Khi chuyển từ REAL TIME sang SIMULATION:
+
+    - Không thay đổi entryLog
+    - Không reset currentTick
+    - Không thay đổi lịch sử sản xuất
+    - Chỉ chuyển chế độ thời gian
+
+    simTime hiện tại được giữ nguyên làm điểm bắt đầu.
+  */
 
   state.timeMode = "simulation";
 
-  // Simulation mặc định chạy.
   playing = true;
   lastFrameTs = null;
 
