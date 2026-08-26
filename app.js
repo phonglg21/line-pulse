@@ -346,12 +346,30 @@ function getPlanDay(date){
     state.productionPlans &&
     state.productionPlans[month];
 
-  if(!plan) return null;
+  if(!plan){
+    return null;
+  }
 
-  return plan.days?.[key] || {
-    workingHours: 0,
-    plannedQty: 0
-  };
+  /*
+    Có ngày trong KHSX:
+    trả đúng Working Hours.
+    
+    0 giờ = ngày nghỉ thật sự.
+  */
+  if(
+    Object.prototype.hasOwnProperty.call(
+      plan.days || {},
+      key
+    )
+  ){
+    return plan.days[key];
+  }
+
+  /*
+    Không có dữ liệu ngày:
+    không tự biến thành ngày nghỉ.
+  */
+  return null;
 }
 
 function plannedHours(date){
