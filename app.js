@@ -1132,19 +1132,11 @@ function syncEntryLog(
 function recompute(){
 
   const ctx = {
-
     config:state.config,
-
     lots:state.lots,
-
-    consumedMap:
-      state.consumedMap,
-
-    entryLog:
-      state.entryLog
-      state.actualThrough
+    consumedMap:state.consumedMap,
+    entryLog:state.entryLog
   };
-
 
   const ct =
     computeCurrentTick(
@@ -1152,15 +1144,25 @@ function recompute(){
       state.simTime
     );
 
+  /*
+    Tạo dữ liệu mô phỏng nếu cần.
 
+    Quan trọng:
+    syncEntryLog không được xóa
+    những entry đã tồn tại.
+  */
   syncEntryLog(
     ctx,
     ct
   );
 
+  state.currentTick = ct;
 
-  state.currentTick =
-    ct;
+  /*
+    Nếu đang REAL TIME,
+    xác nhận những xe đã thực sự xảy ra.
+  */
+  lockActualHistory();
 }
 
 
