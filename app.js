@@ -1392,6 +1392,79 @@ function recompute(){
   state.currentTick = ct;
 
 }
+   function projectEndOfDay(){
+
+  const now =
+    new Date(state.simTime);
+
+  const end =
+    dayEndTime(
+      now,
+      state.config
+    );
+
+  const anchor =
+    getAnchor(state.config);
+
+  const elapsed =
+    elapsedWorkSeconds(
+      anchor,
+      end,
+      state.config
+    );
+
+  const targetTick =
+    Math.max(
+      state.currentTick,
+      Math.floor(
+        elapsed /
+        state.config.takt
+      )
+    );
+
+
+  /*
+    Forecast không được sửa
+    lịch sử thực tế.
+
+    Lấy bản VIEW hiện tại làm nền.
+  */
+
+  const activeLog =
+    getActiveEntryLog();
+
+  const activeConsumedMap =
+    getActiveConsumedMap();
+
+
+  const ctx = {
+
+    config:
+      state.config,
+
+    lots:
+      state.lots,
+
+    consumedMap:
+      Object.assign(
+        {},
+        activeConsumedMap
+      ),
+
+    entryLog:
+      activeLog.slice()
+
+  };
+
+
+  syncEntryLog(
+    ctx,
+    targetTick
+  );
+
+
+  return ctx.entryLog;
+}
 /* =========================================================
    KHSX IMPORT
    ========================================================= */
