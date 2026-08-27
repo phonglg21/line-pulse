@@ -902,12 +902,40 @@ function computeCurrentTick(
   simTimeIso
 ){
 
-  const anchor =
-    getAnchor(config);
-
   const now =
     new Date(simTimeIso);
 
+  if(
+    isNaN(now.getTime())
+  ){
+    return 0;
+  }
+
+  const anchor =
+    getAnchor(config);
+
+  /*
+    Trước thời điểm bắt đầu chuyền
+    thì chưa có tick nào.
+  */
+  if(now <= anchor){
+    return 0;
+  }
+
+  /*
+    elapsedWorkSeconds() là Time Engine
+    chính thức.
+
+    Hàm này đã đi qua:
+      getDayProductionWindow()
+        ↓
+      plannedHours()
+        ↓
+      KHSX từng ngày
+
+    nên Working Hours của KHSX là
+    nguồn thời gian sản xuất chính.
+  */
   const elapsed =
     elapsedWorkSeconds(
       anchor,
@@ -918,7 +946,8 @@ function computeCurrentTick(
   return Math.max(
     0,
     Math.floor(
-      elapsed/config.takt
+      elapsed /
+      Number(config.takt || 1)
     )
   );
 }
