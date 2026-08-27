@@ -1071,6 +1071,63 @@ function syncEntryLog(
   }
 }
 
+   function lockActualHistory(){
+
+  /*
+    Chỉ REAL TIME mới xác nhận lịch sử thật.
+
+    SIMULATION chỉ là mô phỏng,
+    không được biến dữ liệu tương lai
+    thành lịch sử thật.
+  */
+
+  if(!isRealtimeMode()){
+    return;
+  }
+
+  if(
+    !Array.isArray(state.entryLog) ||
+    !state.entryLog.length
+  ){
+    return;
+  }
+
+  const now =
+    new Date();
+
+  let actualTick = 0;
+
+  for(const entry of state.entryLog){
+
+    if(!entry || !entry.entryTime){
+      continue;
+    }
+
+    const t =
+      new Date(entry.entryTime);
+
+    if(
+      !isNaN(t.getTime()) &&
+      t <= now
+    ){
+
+      actualTick =
+        Math.max(
+          actualTick,
+          Number(entry.tick) || 0
+        );
+
+    }
+
+  }
+
+  if(actualTick > 0){
+
+    state.actualThrough =
+      actualTick;
+
+  }
+}
 
 function recompute(){
 
