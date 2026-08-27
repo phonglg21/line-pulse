@@ -1016,22 +1016,74 @@ function computeCurrentTick(){
       }
 
 
-      let workSeconds =
-        0;
+      let workSeconds = 0;
 
-      if(
-        effectiveEnd >
-        start
-      ){
+if(
+  effectiveEnd >
+  start
+){
 
-        workSeconds =
-          elapsedWorkSeconds(
-            start,
-            effectiveEnd,
-            state.config
-          );
+  workSeconds =
+    (
+      effectiveEnd.getTime() -
+      start.getTime()
+    ) / 1000;
 
-      }
+
+  /*
+    Trừ thời gian break trong ngày.
+  */
+
+  const breaks =
+    window.breaks || [];
+
+  for(
+    const br of breaks
+  ){
+
+    const bs =
+      br.start.getTime();
+
+    const be =
+      br.end.getTime();
+
+
+    const overlapStart =
+      Math.max(
+        start.getTime(),
+        bs
+      );
+
+    const overlapEnd =
+      Math.min(
+        effectiveEnd.getTime(),
+        be
+      );
+
+
+    if(
+      overlapEnd >
+      overlapStart
+    ){
+
+      workSeconds -=
+        (
+          overlapEnd -
+          overlapStart
+        ) / 1000;
+
+    }
+
+  }
+
+
+  workSeconds =
+    Math.max(
+      0,
+      workSeconds
+    );
+
+}
 
 
       /*
