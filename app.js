@@ -2250,18 +2250,6 @@ if(month === currentMonth){
   );
 }
 
-      /*
-        THÁNG TƯƠNG LAI:
-        thay toàn bộ tháng
-      */
-
-      Object.assign(
-        merged,
-        incoming
-      );
-    }
-
-
     const version =
       previous
         ? Number(previous.version)+1
