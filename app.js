@@ -2319,46 +2319,23 @@ if(month === currentMonth){
       phải được tính lại.
     */
 
-    if(month === currentMonth){
+/*
+  KHSX mới chỉ thay đổi cách tính
+  thời gian từ thời điểm hiện tại trở đi.
 
-      const currentTick =
-        computeCurrentTick(
-          state.config,
-          state.simTime
-        );
+  KHÔNG được sửa hoặc cắt entryLog
+  vì entryLog là lịch sử thực tế.
+*/
 
+if(month === currentMonth){
 
-      if(
-        state.entryLog.length >
-        currentTick
-      ){
+  /*
+    Không làm gì với state.entryLog.
+    recompute() sẽ tự tạo lại phần
+    mô phỏng tương lai nếu cần.
+  */
 
-        state.entryLog =
-          state.entryLog.slice(
-            0,
-            currentTick
-          );
-
-
-        state.consumedMap={};
-
-
-        for(
-          const e
-          of state.entryLog
-        ){
-
-          if(!e.empty){
-
-            state.consumedMap[e.lotId] =
-              (
-                state.consumedMap[e.lotId] ||
-                0
-              ) + 1;
-          }
-        }
-      }
-    }
+}
 
 
     try{
