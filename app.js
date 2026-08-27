@@ -1155,14 +1155,57 @@ function syncEntryLog(
   }
 }
 
-function recompute(){
+/* =========================================================
+   VIEW DATA
+   ========================================================= */
 
-  const ctx = {
-    config:state.config,
-    lots:state.lots,
-    consumedMap:state.consumedMap,
-    entryLog:state.entryLog
-  };
+let simulationViewLog = [];
+let simulationViewConsumedMap = {};
+
+
+function getActiveEntryLog(){
+
+  if(state.timeMode === "simulation"){
+    return simulationViewLog;
+  }
+
+  return state.entryLog;
+}
+
+
+function getActiveConsumedMap(){
+
+  if(state.timeMode === "simulation"){
+    return simulationViewConsumedMap;
+  }
+
+  return state.consumedMap;
+}
+
+
+function rebuildConsumedMapFromLog(log){
+
+  const map = {};
+
+  for(const e of log){
+
+    if(!e || e.empty){
+      continue;
+    }
+
+    map[e.lotId] =
+      (map[e.lotId] || 0) + 1;
+  }
+
+  return map;
+}
+
+
+/* =========================================================
+   RECOMPUTE
+   ========================================================= */
+
+function recompute(){
 
   const ct =
     computeCurrentTick(
@@ -1170,55 +1213,103 @@ function recompute(){
       state.simTime
     );
 
-  /*
-    Tạo dữ liệu mô phỏng nếu cần.
 
-    Quan trọng:
-    syncEntryLog không được xóa
-    những entry đã tồn tại.
-  */
-  syncEntryLog(
-    ctx,
-    ct
-  );
+  /* -------------------------------------------------------
+     REAL TIME
+     ------------------------------------------------------- */
 
-  state.currentTick = ct;
+  if(isRealtimeMode()){
 
-  /*
-    Nếu đang REAL TIME,
-    xác nhận những xe đã thực sự xảy ra.
-  */
-  lockActualHistory();
-}
+    const ctx = {
+
+      config:state.config,
+
+      lots:state.lots,
+
+      consumedMap:
+        state.consumedMap,
+
+      entryLog:
+        state.entryLog
+
+    };
 
 
-function projectEndOfDay(){
+    /*
+      REAL TIME được phép ghi thêm
+      lịch sử thực tế.
+    */
 
-  const now =
-    new Date(state.simTime);
-
-  const end =
-    dayEndTime(
-      now,
-      state.config
+    syncEntryLog(
+      ctx,
+      ct
     );
 
-  const anchor =
-    getAnchor(state.config);
 
-  const elapsed =
-    elapsedWorkSeconds(
-      anchor,
-      end,
-      state.config
+    state.currentTick = ct;
+
+
+    /*
+      Xác nhận và khóa lịch sử thực tế.
+    */
+
+    lockActualHistory();
+
+
+    simulationViewLog = [];
+    simulationViewConsumedMap = {};
+
+    return;
+  }
+
+
+  /* -------------------------------------------------------
+     SIMULATION
+     ------------------------------------------------------- */
+
+  /*
+    TUYỆT ĐỐI KHÔNG ghi vào state.entryLog.
+
+    Chỉ lấy lịch sử thực tế làm nền,
+    sau đó tạo một bản mô phỏng tạm thời.
+  */
+
+  const actualCount =
+    Math.min(
+      Number(state.actualThrough || 0),
+      state.entryLog.length
     );
 
-  const targetTick =
-    Math.max(
-      state.currentTick,
-      Math.floor(
-        elapsed/state.config.takt
-      )
+
+  /*
+    Nếu actualThrough chưa có dữ liệu
+    thì coi toàn bộ entryLog hiện tại
+    là lịch sử đã có.
+  */
+
+  const safeActualCount =
+    actualCount > 0
+      ? actualCount
+      : state.entryLog.length;
+
+
+  const baseCount =
+    Math.min(
+      ct,
+      safeActualCount
+    );
+
+
+  const simulatedLog =
+    state.entryLog.slice(
+      0,
+      baseCount
+    );
+
+
+  const simulatedConsumedMap =
+    rebuildConsumedMapFromLog(
+      simulatedLog
     );
 
 
@@ -1229,36 +1320,34 @@ function projectEndOfDay(){
     lots:state.lots,
 
     consumedMap:
-      Object.assign(
-        {},
-        state.consumedMap
-      ),
+      simulatedConsumedMap,
 
     entryLog:
-      state.entryLog.slice()
+      simulatedLog
+
   };
 
 
+  /*
+    Nếu đang mô phỏng tới tương lai,
+    chỉ tạo thêm dữ liệu trong bản sao.
+  */
+
   syncEntryLog(
     ctx,
-    targetTick
+    ct
   );
 
-  return ctx.entryLog;
-}
-   function getLinePositions(){
-  const cap = capacity(state.config);
-  const positions = new Array(cap).fill(null);
 
-  for(let pos = 1; pos <= cap; pos++){
-    const tick = state.currentTick - pos + 1;
+  simulationViewLog =
+    ctx.entryLog;
 
-    if(tick >= 1 && tick <= state.entryLog.length){
-      positions[pos - 1] = state.entryLog[tick - 1];
-    }
-  }
+  simulationViewConsumedMap =
+    ctx.consumedMap;
 
-  return positions;
+
+  state.currentTick = ct;
+
 }
 /* =========================================================
    KHSX IMPORT
