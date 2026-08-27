@@ -878,7 +878,7 @@ function getShiftStatus(config,now){
     return "holiday";
 
   const end =
-    dayEndTime(now,config);
+  window.end;
 
   if(
     now < window.start ||
