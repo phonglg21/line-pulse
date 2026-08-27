@@ -1256,7 +1256,45 @@ function recompute(){
       state.simTime
     );
 
+function getLinePositions(){
 
+  const log =
+    getActiveEntryLog();
+
+  const cap =
+    capacity(state.config);
+
+  const positions =
+    new Array(cap).fill(null);
+
+
+  for(
+    let pos = 1;
+    pos <= cap;
+    pos++
+  ){
+
+    const tick =
+      state.currentTick -
+      pos +
+      1;
+
+
+    if(
+      tick >= 1 &&
+      tick <= log.length
+    ){
+
+      positions[pos - 1] =
+        log[tick - 1];
+
+    }
+
+  }
+
+
+  return positions;
+}
   /* -------------------------------------------------------
      REAL TIME
      ------------------------------------------------------- */
