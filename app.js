@@ -1786,46 +1786,62 @@ const qtyRow =
     }
 
 
-    const raw =
-      rows[hoursRow]?.[c];
+    const rawHours =
+  rows[hoursRow]?.[c];
+
+const hours =
+  rawHours === "" ||
+  rawHours == null
+    ? 0
+    : Number(
+        String(rawHours)
+          .replace(",",".")
+      );
 
 
-    const hours =
-      raw === "" ||
-      raw == null
-        ? 0
-        : Number(
-            String(raw)
-              .replace(",",".")
-          );
+let plannedQty = 0;
+
+if(qtyRow !== null){
+
+  const rawQty =
+    rows[qtyRow]?.[c];
+
+  plannedQty =
+    rawQty === "" ||
+    rawQty == null
+      ? 0
+      : Number(
+          String(rawQty)
+            .replace(",",".")
+        );
+
+}
 
 
-    if(
-      !Number.isFinite(hours) ||
-      hours < 0
-    ){
-      continue;
-    }
+if(
+  !Number.isFinite(plannedQty) ||
+  plannedQty < 0
+){
+
+  plannedQty = 0;
+
+}
 
 
-    const workDate =
-      `${planMonth}-${String(day).padStart(2,"0")}`;
+days.push({
 
+  work_date:
+    workDate,
 
-    days.push({
+  working_hours:
+    hours,
 
-      work_date:
-        workDate,
+  planned_qty:
+    Math.round(
+      plannedQty
+    )
 
-      working_hours:
-        hours,
-
-      planned_qty:
-        Math.round(
-          hours *
-          Number(state.config.uph || 0)
-        )
-    });
+});
   }
 
 
