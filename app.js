@@ -109,7 +109,8 @@ function normalizeState(parsed){
   state.nextId = Number(parsed.nextId || 1);
   state.currentTick = Number(parsed.currentTick || 0);
 
-  state.productionPlans = parsed.productionPlans || {};
+  /* Tick cuối cùng đã được xác nhận là lịch sử thực tế */
+  state.actualThrough = Number(parsed.actualThrough || 0);
 
   if(!state.simTime){
     state.simTime = new Date().toISOString();
