@@ -2614,7 +2614,20 @@ function renderForecasts(){
     });
   }
 
-  const completed = summarizeByExitToday(state.entryLog, e=> sameCalendarDate(new Date(e.exitTime), now) && (e.tick+cap)<=state.currentTick);
+  const activeLog =
+  getActiveEntryLog();
+
+const completed =
+  summarizeByExitToday(
+    activeLog,
+    e =>
+      sameCalendarDate(
+        new Date(e.exitTime),
+        now
+      ) &&
+      (e.tick + cap) <=
+      state.currentTick
+  );
   const doneEl = $("#completedTodaySummary");
   doneEl.innerHTML = "";
   if(!completed.length){
