@@ -2565,7 +2565,8 @@ function renderLineDiagram(){
 
 function renderNowEntering(){
   const card = $("#nowEnteringCard");
-  const last = state.entryLog[state.currentTick-1];
+  const log = getActiveEntryLog();
+  const last = log[state.currentTick - 1];
   if(!last || last.empty){
     card.innerHTML = `<div class="meta">Chưa có xe vào chuyền tại thời điểm này.</div>`;
     return;
