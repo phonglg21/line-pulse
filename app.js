@@ -982,11 +982,22 @@ function syncEntryLog(
 ){
 
   const anchor =
-    getAnchor(ctx.config);
+    getAnchor(
+      ctx.config
+    );
 
   const cap =
-    capacity(ctx.config);
+    capacity(
+      ctx.config
+    );
 
+
+  /*
+    KHÔNG BAO GIỜ XÓA entryLog.
+
+    Nếu targetTick nhỏ hơn số entry hiện tại
+    thì đó chỉ là tua ngược thời gian.
+  */
 
   while(
     ctx.entryLog.length <
@@ -1003,10 +1014,16 @@ function syncEntryLog(
       );
 
 
+    /*
+      Entry mới:
+      thời gian được tính từ KHSX hiện tại.
+    */
+
     const entryTime =
       dateFromElapsedWorkSeconds(
         anchor,
-        tick*ctx.config.takt,
+        tick *
+        ctx.config.takt,
         ctx.config
       ).toISOString();
 
@@ -1014,7 +1031,8 @@ function syncEntryLog(
     const exitTime =
       dateFromElapsedWorkSeconds(
         anchor,
-        (tick+cap)*ctx.config.takt,
+        (tick + cap) *
+        ctx.config.takt,
         ctx.config
       ).toISOString();
 
@@ -1030,21 +1048,27 @@ function syncEntryLog(
       ctx.consumedMap[lot.id] =
         unitIndex;
 
+
       ctx.entryLog.push({
 
         tick,
 
-        lotId:lot.id,
+        lotId:
+          lot.id,
 
-        code:lot.code,
+        code:
+          lot.code,
 
-        model:lot.model,
+        model:
+          lot.model,
 
-        spec:lot.spec,
+        spec:
+          lot.spec,
 
         unitIndex,
 
-        totalQty:lot.originalQty,
+        totalQty:
+          lot.originalQty,
 
         entryTime,
 
@@ -1067,7 +1091,9 @@ function syncEntryLog(
         exitTime
 
       });
+
     }
+
   }
 }
 
