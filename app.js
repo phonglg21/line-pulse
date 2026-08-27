@@ -445,22 +445,34 @@ function getDayProductionWindow(date, config){
 
     }
 
-    return {
+    const end =
+  new Date(
+    start.getTime() +
+    hours * 3600 * 1000
+  );
 
-      start,
+return {
 
-      end:null,
+  start,
 
-      breaks:getBaseBreaks(
-        date,
-        config
-      ),
+  /*
+    Working Hours là khoảng thời gian
+    được phép sản xuất của ngày đó.
+  */
+  end,
 
-      // Working Hours là giờ sản xuất NET
-      workSeconds:hours * 3600,
+  breaks:
+    getBaseBreaks(
+      date,
+      config
+    ),
 
-      planned:true
-    };
+  workSeconds:
+    hours * 3600,
+
+  planned:true
+
+};
   }
 
 
