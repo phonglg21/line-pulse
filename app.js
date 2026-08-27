@@ -1186,120 +1186,216 @@ function syncEntryLog(
   targetTick
 ){
 
-  const anchor =
-    getAnchor(
-      ctx.config
-    );
-
-  const cap =
-    capacity(
-      ctx.config
-    );
+  const currentLength =
+    ctx.entryLog.length;
 
 
-  /*
-    KHÔNG BAO GIỜ XÓA entryLog.
-
-    Nếu targetTick nhỏ hơn số entry hiện tại
-    thì đó chỉ là tua ngược thời gian.
-  */
-
-  while(
-    ctx.entryLog.length <
-    targetTick
+  if(
+    targetTick <=
+    currentLength
   ){
 
-    const tick =
-      ctx.entryLog.length + 1;
+    return;
 
-    const lot =
-      nextAvailableLot(
-        ctx.lots,
-        ctx.consumedMap
+  }
+
+
+  const anchor =
+    getAnchor(ctx.config);
+
+
+  for(
+    let tick =
+      currentLength + 1;
+
+    tick <= targetTick;
+
+    tick++
+  ){
+
+    /*
+      Tìm ngày mà tick này thuộc về.
+    */
+
+    let remaining =
+      tick;
+
+    let cursor =
+      new Date(anchor);
+
+    let foundDate =
+      null;
+
+    let foundIndex =
+      0;
+
+    const safetyLimit =
+      3700;
+
+
+    for(
+      let d = 0;
+      d < safetyLimit;
+      d++
+    ){
+
+      const date =
+        new Date(cursor);
+
+      const window =
+        getDayProductionWindow(
+          date,
+          ctx.config
+        );
+
+
+      if(
+        window.planned
+      ){
+
+        const qty =
+          plannedQty(date);
+
+
+        if(
+          qty !== null &&
+          qty > 0
+        ){
+
+          if(
+            remaining <= qty
+          ){
+
+            foundDate =
+              date;
+
+            foundIndex =
+              remaining;
+
+            break;
+
+          }
+
+
+          remaining -=
+            qty;
+
+        }
+
+      }
+
+
+      cursor =
+        new Date(
+          cursor.getTime() +
+          86400000
+        );
+
+    }
+
+
+    if(
+      !foundDate
+    ){
+
+      break;
+
+    }
+
+
+    /*
+      Tính thời điểm xe thứ N
+      trong ngày.
+    */
+
+    const window =
+      getDayProductionWindow(
+        foundDate,
+        ctx.config
+      );
+
+
+    const start =
+      window.start;
+
+
+    /*
+      Xe 1:
+        start + 1 takt
+
+      Xe 2:
+        start + 2 takt
+
+      ...
+    */
+
+    const targetSeconds =
+      foundIndex *
+      ctx.config.takt;
+
+
+    let entryTime =
+      new Date(
+        start.getTime() +
+        targetSeconds * 1000
       );
 
 
     /*
-      Entry mới:
-      thời gian được tính từ KHSX hiện tại.
+      Nếu đi qua break,
+      đẩy thời gian xe sang sau break.
     */
 
-    const entryTime =
-      dateFromElapsedWorkSeconds(
-        anchor,
-        tick *
-        ctx.config.takt,
-        ctx.config
-      ).toISOString();
+    const breaks =
+      window.breaks || [];
 
 
-    const exitTime =
-      dateFromElapsedWorkSeconds(
-        anchor,
-        (tick + cap) *
-        ctx.config.takt,
-        ctx.config
-      ).toISOString();
+    let changed = true;
 
+    while(changed){
 
-    if(lot){
+      changed = false;
 
-      const consumed =
-        ctx.consumedMap[lot.id] || 0;
+      for(
+        const br of breaks
+      ){
 
-      const unitIndex =
-        consumed + 1;
+        if(
+          entryTime >= br.start &&
+          entryTime < br.end
+        ){
 
-      ctx.consumedMap[lot.id] =
-        unitIndex;
+          entryTime =
+            new Date(
+              br.end
+            );
 
+          changed = true;
 
-      ctx.entryLog.push({
+        }
 
-        tick,
-
-        lotId:
-          lot.id,
-
-        code:
-          lot.code,
-
-        model:
-          lot.model,
-
-        spec:
-          lot.spec,
-
-        unitIndex,
-
-        totalQty:
-          lot.originalQty,
-
-        entryTime,
-
-        exitTime,
-
-        empty:false
-
-      });
-
-    }else{
-
-      ctx.entryLog.push({
-
-        tick,
-
-        empty:true,
-
-        entryTime,
-
-        exitTime
-
-      });
+      }
 
     }
 
+
+    ctx.entryLog.push({
+
+      tick,
+
+      entryTime:
+        entryTime.toISOString(),
+
+      lotId:
+        null,
+
+      lotCode:
+        null
+
+    });
+
   }
+
 }
 
 
