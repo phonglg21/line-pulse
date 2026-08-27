@@ -1730,7 +1730,14 @@ function parseProductionPlanSheet(
     findDayRow(rows);
 
   const hoursRow =
-    findWorkingHoursRow(rows);
+  findWorkingHoursRow(rows);
+
+const qtyRow =
+  findPlannedQtyRow(
+    rows,
+    dayInfo.row,
+    hoursRow
+  );
 
   const planMonth =
     detectPlanMonth(
