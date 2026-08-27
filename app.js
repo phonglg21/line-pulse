@@ -60,8 +60,12 @@ let state = {
   lastTimeSync: new Date().toISOString(),
 
   nextId: 1,
-  currentTick: 0,
-  lotColors: {},
+currentTick: 0,
+
+/* Tick cuối cùng đã được xác nhận là lịch sử thực tế */
+actualThrough: 0,
+
+lotColors: {},
   lotColorCounter: 0,
 
   // KHSX theo từng tháng
