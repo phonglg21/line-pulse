@@ -2742,7 +2742,10 @@ function renderLogTable(){
   const tbody = $("#logTbody");
   tbody.innerHTML = "";
   const cap = capacity(state.config);
-  const recent = state.entryLog.slice(-60).reverse();
+  const recent =
+  getActiveEntryLog()
+    .slice(-60)
+    .reverse();
   if(!recent.length){
     tbody.innerHTML = `<tr><td colspan="8" style="font-family:var(--font-sans); color:var(--text-dim); text-align:center; padding:18px;">Chưa có dữ liệu.</td></tr>`;
     return;
