@@ -388,7 +388,23 @@ function plannedHours(date){
     Number(day.workingHours) || 0
   );
 }
+function plannedQty(date){
 
+  const day =
+    getPlanDay(date);
+
+  if(!day){
+    return null;
+  }
+
+  return Math.max(
+    0,
+    Number(
+      day.plannedQty
+    ) || 0
+  );
+
+}
 
 /* =========================================================
    BREAKS
