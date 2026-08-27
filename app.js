@@ -1661,7 +1661,51 @@ function findWorkingHoursRow(rows){
   );
 }
 
+function findPlannedQtyRow(rows, dayRow, hoursRow){
 
+  for(
+    let r=0;
+    r<Math.min(rows.length,20);
+    r++
+  ){
+
+    const text =
+      (rows[r] || [])
+        .map(v =>
+          String(v ?? "")
+            .replace(/\n/g," ")
+            .trim()
+        )
+        .join(" ");
+
+    if(
+      /planned\s*(qty|quantity)|production\s*(qty|quantity)|quantity|\bqty\b|số\s*lượng/i.test(text)
+      &&
+      r !== dayRow &&
+      r !== hoursRow
+    ){
+
+      return r;
+
+    }
+
+  }
+
+
+  const fallback =
+    dayRow + 1;
+
+  if(
+    fallback !== hoursRow &&
+    fallback < rows.length
+  ){
+
+    return fallback;
+
+  }
+
+  return null;
+}
 function parseProductionPlanSheet(
   sheetName
 ){
