@@ -1084,6 +1084,7 @@ function recompute(){
 
     entryLog:
       state.entryLog
+      state.actualThrough
   };
 
 
