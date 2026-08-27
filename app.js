@@ -1216,217 +1216,122 @@ function syncEntryLog(
   targetTick
 ){
 
-  const currentLength =
-    ctx.entryLog.length;
-
-
-  if(
-    targetTick <=
-    currentLength
-  ){
-
-    return;
-
-  }
-
-
   const anchor =
-    getAnchor(ctx.config);
+    getAnchor(
+      ctx.config
+    );
+
+  const cap =
+    capacity(
+      ctx.config
+    );
 
 
-  for(
-    let tick =
-      currentLength + 1;
+  /*
+    KHÔNG BAO GIỜ XÓA entryLog.
 
-    tick <= targetTick;
+    Nếu targetTick nhỏ hơn số entry hiện tại
+    thì đó chỉ là tua ngược thời gian.
+  */
 
-    tick++
+  while(
+    ctx.entryLog.length <
+    targetTick
   ){
 
-    /*
-      Tìm ngày mà tick này thuộc về.
-    */
+    const tick =
+      ctx.entryLog.length + 1;
 
-    let remaining =
-      tick;
-
-    let cursor =
-      new Date(anchor);
-
-    let foundDate =
-      null;
-
-    let foundIndex =
-      0;
-
-    const safetyLimit =
-      3700;
-
-
-    for(
-      let d = 0;
-      d < safetyLimit;
-      d++
-    ){
-
-      const date =
-        new Date(cursor);
-
-      const window =
-        getDayProductionWindow(
-          date,
-          ctx.config
-        );
-
-
-      if(
-        window.planned
-      ){
-
-        const qty =
-          plannedQty(date);
-
-
-        if(
-          qty !== null &&
-          qty > 0
-        ){
-
-          if(
-            remaining <= qty
-          ){
-
-            foundDate =
-              date;
-
-            foundIndex =
-              remaining;
-
-            break;
-
-          }
-
-
-          remaining -=
-            qty;
-
-        }
-
-      }
-
-
-      cursor =
-        new Date(
-          cursor.getTime() +
-          86400000
-        );
-
-    }
-
-
-    if(
-      !foundDate
-    ){
-
-      break;
-
-    }
+    const lot =
+      nextAvailableLot(
+        ctx.lots,
+        ctx.consumedMap
+      );
 
 
     /*
-      Tính thời điểm xe thứ N
-      trong ngày.
+      Entry mới:
+      thời gian được tính từ KHSX hiện tại.
     */
 
-    const window =
-      getDayProductionWindow(
-        foundDate,
+    const entryTime =
+      dateFromElapsedWorkSeconds(
+        anchor,
+        tick *
+        ctx.config.takt,
         ctx.config
-      );
+      ).toISOString();
 
 
-    const start =
-      window.start;
+    const exitTime =
+      dateFromElapsedWorkSeconds(
+        anchor,
+        (tick + cap) *
+        ctx.config.takt,
+        ctx.config
+      ).toISOString();
 
 
-    /*
-      Xe 1:
-        start + 1 takt
+    if(lot){
 
-      Xe 2:
-        start + 2 takt
+      const consumed =
+        ctx.consumedMap[lot.id] || 0;
 
-      ...
-    */
+      const unitIndex =
+        consumed + 1;
 
-    const targetSeconds =
-      foundIndex *
-      ctx.config.takt;
+      ctx.consumedMap[lot.id] =
+        unitIndex;
 
 
-    let entryTime =
-      new Date(
-        start.getTime() +
-        targetSeconds * 1000
-      );
+      ctx.entryLog.push({
 
+        tick,
 
-    /*
-      Nếu đi qua break,
-      đẩy thời gian xe sang sau break.
-    */
+        lotId:
+          lot.id,
 
-    const breaks =
-      window.breaks || [];
+        code:
+          lot.code,
 
+        model:
+          lot.model,
 
-    let changed = true;
+        spec:
+          lot.spec,
 
-    while(changed){
+        unitIndex,
 
-      changed = false;
+        totalQty:
+          lot.originalQty,
 
-      for(
-        const br of breaks
-      ){
+        entryTime,
 
-        if(
-          entryTime >= br.start &&
-          entryTime < br.end
-        ){
+        exitTime,
 
-          entryTime =
-            new Date(
-              br.end
-            );
+        empty:false
 
-          changed = true;
+      });
 
-        }
+    }else{
 
-      }
+      ctx.entryLog.push({
+
+        tick,
+
+        empty:true,
+
+        entryTime,
+
+        exitTime
+
+      });
 
     }
-
-
-    ctx.entryLog.push({
-
-      tick,
-
-      entryTime:
-        entryTime.toISOString(),
-
-      lotId:
-        null,
-
-      lotCode:
-        null
-
-    });
 
   }
-
 }
+
 
    function lockActualHistory(){
 
