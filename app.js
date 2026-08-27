@@ -930,30 +930,181 @@ function capacity(config){
   );
 }
 
-function computeCurrentTick(
-  config,
-  simTimeIso
-){
+function computeCurrentTick(){
 
   const now =
-    new Date(simTimeIso);
-
-  if(
-    isNaN(now.getTime())
-  ){
-    return 0;
-  }
+    new Date(state.simTime);
 
   const anchor =
-    getAnchor(config);
+    getAnchor(state.config);
 
   /*
-    Trước thời điểm bắt đầu chuyền
-    thì chưa có tick nào.
+    Tick = số xe được phép vào chuyền
+    tính từ đầu kế hoạch đến thời điểm hiện tại.
+
+    Mỗi ngày:
+      - Working Hours quyết định thời gian chạy
+      - Planned Qty quyết định số xe tối đa
+      - UPH/Takt quyết định tốc độ vào xe
   */
-  if(now <= anchor){
-    return 0;
+
+  let totalTicks = 0;
+
+  let cursor =
+    new Date(anchor);
+
+  const safetyLimit = 3700;
+
+  for(
+    let i = 0;
+    i < safetyLimit;
+    i++
+  ){
+
+    const date =
+      new Date(cursor);
+
+    const window =
+      getDayProductionWindow(
+        date,
+        state.config
+      );
+
+    if(window.planned){
+
+      const start =
+        window.start;
+
+      const end =
+        window.end;
+
+
+      /*
+        Nếu ngày hiện tại nằm trước ca:
+        chưa có xe.
+      */
+
+      if(
+        now < start
+      ){
+
+        break;
+
+      }
+
+
+      /*
+        Tính thời gian sản xuất thực tế
+        đã trôi qua trong ngày.
+      */
+
+      let effectiveEnd;
+
+      if(
+        now.getTime() <
+        end.getTime()
+      ){
+
+        effectiveEnd =
+          now;
+
+      }else{
+
+        effectiveEnd =
+          end;
+
+      }
+
+
+      let workSeconds =
+        0;
+
+      if(
+        effectiveEnd >
+        start
+      ){
+
+        workSeconds =
+          elapsedWorkSeconds(
+            start,
+            effectiveEnd,
+            state.config
+          );
+
+      }
+
+
+      /*
+        Số xe theo UPH / Takt.
+      */
+
+      let dayTicks =
+        Math.floor(
+          workSeconds /
+          state.config.takt
+        );
+
+
+      /*
+        KHÔNG ĐƯỢC vượt Planned Qty.
+      */
+
+      const qty =
+        plannedQty(date);
+
+
+      if(
+        qty !== null
+      ){
+
+        dayTicks =
+          Math.min(
+            dayTicks,
+            qty
+          );
+
+      }
+
+
+      totalTicks +=
+        dayTicks;
+
+
+      /*
+        Nếu đang ở đúng ngày hiện tại
+        thì dừng vòng lặp.
+      */
+
+      if(
+        date.toDateString() ===
+        now.toDateString()
+      ){
+
+        break;
+
+      }
+
+    }
+
+
+    /*
+      Sang ngày tiếp theo.
+    */
+
+    cursor =
+      new Date(
+        cursor.getTime() +
+        86400000
+      );
+
   }
+
+
+  return Math.max(
+    0,
+    totalTicks
+  );
+}
 
   /*
     elapsedWorkSeconds() là Time Engine
