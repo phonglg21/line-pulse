@@ -2653,15 +2653,28 @@ const completed =
 let dragState = null;
 
 function renderQueueTable(){
+
   const tbody = $("#queueTbody");
+
   tbody.innerHTML = "";
-  const remaining = state.lots.filter(l => (l.originalQty-(state.consumedMap[l.id]||0)) > 0);
+
+  const consumedMap =
+    getActiveConsumedMap();
+
+  const remaining =
+    state.lots.filter(
+      l =>
+        (
+          l.originalQty -
+          (consumedMap[l.id] || 0)
+        ) > 0
+    );
   if(!remaining.length){
     tbody.innerHTML = `<tr><td colspan="8" style="font-family:var(--font-sans); color:var(--text-dim); text-align:center; padding:22px;">Hàng đợi trống — nhập lot từ Excel/CSV hoặc thêm thủ công.</td></tr>`;
     return;
   }
   remaining.forEach((lot, idx)=>{
-    const consumed = state.consumedMap[lot.id]||0;
+    const consumed = consumedMap[lot.id]||0;
     const remQty = lot.originalQty - consumed;
     const tr = document.createElement("tr");
     tr.draggable = true;
@@ -2684,7 +2697,7 @@ function renderQueueTable(){
       const id = Number(inp.dataset.id);
       const lot = state.lots.find(l=>l.id===id);
       if(!lot) return;
-      const consumed = state.consumedMap[id]||0;
+      const consumed = consumedMap[id]||0;
       const newRem = Math.max(0, parseInt(inp.value,10)||0);
       lot.originalQty = consumed + newRem;
       toast(`Đã cập nhật số lượng còn lại của lot ${lot.code}`);
@@ -2696,7 +2709,7 @@ function renderQueueTable(){
       const id = Number(btn.dataset.del);
       const lot = state.lots.find(l=>l.id===id);
       if(!lot) return;
-      const consumed = state.consumedMap[id]||0;
+      const consumed = consumedMap[id]||0;
       if(consumed===0){
         state.lots = state.lots.filter(l=>l.id!==id);
       } else {
