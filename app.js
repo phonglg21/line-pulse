@@ -2924,21 +2924,29 @@ async function jump(seconds){
 
 function resetSimulationTime(){
 
-  state.entryLog = [];
-  state.consumedMap = {};
+  /*
+    RESET chỉ reset thời gian mô phỏng.
+
+    KHÔNG xóa lịch sử thực tế.
+  */
+
+  simulationViewLog = [];
+  simulationViewConsumedMap = {};
 
   if(isRealtimeMode()){
 
-    // REAL TIME: reset về hiện tại.
-    state.simTime = new Date().toISOString();
+    // REAL TIME: lấy thời gian thực hiện tại.
+    state.simTime =
+      new Date().toISOString();
 
   }else{
 
-    // SIMULATION: giữ hành vi cũ,
-    // reset về đầu ca.
-    state.simTime = getAnchor(
-      state.config
-    ).toISOString();
+    // SIMULATION: đưa về đầu ca.
+    state.simTime =
+      getAnchor(
+        state.config
+      ).toISOString();
+
   }
 
   state.currentTick = 0;
