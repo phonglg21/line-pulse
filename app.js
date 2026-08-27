@@ -1100,37 +1100,42 @@ function syncEntryLog(
    function lockActualHistory(){
 
   /*
-    Chỉ REAL TIME mới xác nhận lịch sử thật.
-
-    SIMULATION chỉ là mô phỏng,
-    không được biến dữ liệu tương lai
-    thành lịch sử thật.
+    Chỉ REAL TIME mới được xác nhận
+    lịch sử thực tế.
   */
 
   if(!isRealtimeMode()){
     return;
   }
 
+
   if(
-    !Array.isArray(state.entryLog) ||
-    !state.entryLog.length
+    !Array.isArray(state.entryLog)
   ){
-    return;
+    state.entryLog = [];
   }
+
 
   const now =
     new Date();
 
+
   let actualTick = 0;
+
 
   for(const entry of state.entryLog){
 
-    if(!entry || !entry.entryTime){
+    if(
+      !entry ||
+      !entry.entryTime
+    ){
       continue;
     }
 
+
     const t =
       new Date(entry.entryTime);
+
 
     if(
       !isNaN(t.getTime()) &&
@@ -1147,12 +1152,46 @@ function syncEntryLog(
 
   }
 
-  if(actualTick > 0){
 
-    state.actualThrough =
-      actualTick;
+  /*
+    Nếu trước đó entryLog có chứa
+    dữ liệu mô phỏng tương lai,
+    loại phần tương lai đó khỏi
+    lịch sử thực tế.
+  */
+
+  if(
+    state.entryLog.length >
+    actualTick
+  ){
+
+    state.entryLog =
+      state.entryLog.slice(
+        0,
+        actualTick
+      );
 
   }
+
+
+  /*
+    Đây là mốc lịch sử thực tế cuối cùng.
+  */
+
+  state.actualThrough =
+    actualTick;
+
+
+  /*
+    Đồng bộ lại consumedMap từ
+    lịch sử thực tế.
+  */
+
+  state.consumedMap =
+    rebuildConsumedMapFromLog(
+      state.entryLog
+    );
+
 }
 
 /* =========================================================
