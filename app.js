@@ -1158,36 +1158,6 @@ if(
   );
 }
 
-  /*
-    elapsedWorkSeconds() là Time Engine
-    chính thức.
-
-    Hàm này đã đi qua:
-      getDayProductionWindow()
-        ↓
-      plannedHours()
-        ↓
-      KHSX từng ngày
-
-    nên Working Hours của KHSX là
-    nguồn thời gian sản xuất chính.
-  */
-  const elapsed =
-    elapsedWorkSeconds(
-      anchor,
-      now,
-      config
-    );
-
-  return Math.max(
-    0,
-    Math.floor(
-      elapsed /
-      Number(config.takt || 1)
-    )
-  );
-}
-
 
 function nextAvailableLot(
   lots,
