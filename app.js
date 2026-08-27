@@ -3663,29 +3663,51 @@ async function init(){
     ================================================
   */
 
-  $("#resetSimBtn").addEventListener("click", ()=>{
+ $("#resetSimBtn").addEventListener("click", ()=>{
 
-    if(!confirm(
-      "Reset mô phỏng: xoá toàn bộ lịch sử xe đã vào chuyền và đưa giờ về đầu ca. Danh sách lot trong hàng đợi vẫn giữ nguyên. Tiếp tục?"
-    )) return;
+  if(!confirm(
+    "Reset thời gian mô phỏng về đầu ca? Lịch sử sản xuất thực tế sẽ được giữ nguyên."
+  )) return;
 
-    state.entryLog = [];
-    state.consumedMap = {};
 
-    if(state.timeMode === "realtime"){
-      state.simTime = new Date().toISOString();
-    }else{
-      state.simTime =
-        getAnchor(state.config).toISOString();
-    }
+  /*
+    Chỉ reset VIEW của Simulation.
+    Không đụng vào entryLog thực tế.
+  */
 
-    recompute();
-    renderAll();
+  simulationViewLog = [];
+  simulationViewConsumedMap = {};
 
-    saveState();
 
-    toast("Đã reset mô phỏng.");
-  });
+  if(state.timeMode === "realtime"){
+
+    state.simTime =
+      new Date().toISOString();
+
+  }else{
+
+    state.simTime =
+      getAnchor(
+        state.config
+      ).toISOString();
+
+  }
+
+
+  state.currentTick = 0;
+
+
+  recompute();
+  renderAll();
+
+  saveState();
+
+
+  toast(
+    "Đã reset thời gian mô phỏng."
+  );
+
+});
 
   // settings modal
   $("#btnSettings").addEventListener("click", openSettings);
